@@ -478,16 +478,26 @@ class CosvinteReport(FPDF):
     COLOR_TABLE_HDR = (30,  40,  80)
     COLOR_ROW_ALT   = (242, 244, 250)
 
-    def __init__(self):
-        super().__init__(orientation='P', unit='mm', format='A4')
-        self.set_auto_page_break(auto=True, margin=20)
-        # DejaVu เป็น Unicode font ที่รองรับตัวอักษรพิเศษได้ครบถ้วน
-        # fpdf2 มี font นี้ built-in อยู่แล้ว ไม่ต้องดาวน์โหลดเพิ่ม
-        self.add_font("DejaVu",  style="",  fname="DejaVuSansCondensed.ttf")
-        self.add_font("DejaVu",  style="B", fname="DejaVuSansCondensed-Bold.ttf")
-        self.add_font("DejaVu",  style="I", fname="DejaVuSansCondensed-Oblique.ttf")
-        self.add_font("DejaVuM", style="",  fname="DejaVuSansMono.ttf")
-        self.add_font("DejaVuM", style="B", fname="DejaVuSansMono-Bold.ttf")
+def __init__(self):
+    super().__init__(orientation='P', unit='mm', format='A4')
+    self.set_auto_page_break(auto=True, margin=20)
+
+    # ชี้ไปยัง system font directory ที่ apt ติดตั้งให้
+    # เป็นวิธีที่ดีกว่าการเก็บ font ไว้ข้างๆ script
+    # เพราะ font จะถูก manage โดย OS และ update อัตโนมัติ
+    font_dir = "/usr/share/fonts/truetype/dejavu"
+
+    self.add_font("DejaVu",  style="",
+                  fname=os.path.join(font_dir, "DejaVuSansCondensed.ttf"))
+    self.add_font("DejaVu",  style="B",
+                  fname=os.path.join(font_dir, "DejaVuSansCondensed-Bold.ttf"))
+    self.add_font("DejaVu",  style="I",
+                  fname=os.path.join(font_dir, "DejaVuSansCondensed-Oblique.ttf"))
+    self.add_font("DejaVuM", style="",
+                  fname=os.path.join(font_dir, "DejaVuSansMono.ttf"))
+    self.add_font("DejaVuM", style="B",
+                  fname=os.path.join(font_dir, "DejaVuSansMono-Bold.ttf"))
+
 
     def header(self):
         # หน้าแรกเป็น cover ไม่ต้องการ header bar
