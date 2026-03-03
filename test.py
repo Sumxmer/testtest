@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-COSVINTE — Linux Capability Scanner
+COSVINTE - Linux Capability Scanner
 "Conquer Vulnerabilities"
 """
 
@@ -44,7 +44,7 @@ def severity_badge(sev):
 
 def cvss_bar(score, width=20):
     filled = int((score / 10.0) * width)
-    bar = "█" * filled + "░" * (width - filled)
+    bar = "\u2588" * filled + "\u2591" * (width - filled)
     if score >= 9:   color = Color.BG_RED + Color.BOLD
     elif score >= 7: color = Color.RED
     elif score >= 4: color = Color.YELLOW
@@ -64,63 +64,63 @@ CAP_DB = {
     },
     "cap_setuid": {
         "severity": "CRITICAL", "base_score": 9.0,
-        "description": "Allows setting arbitrary UID — attacker can switch to UID 0 (root) at will.",
+        "description": "Allows setting arbitrary UID. Attacker can switch to UID 0 (root) at will.",
         "exploit": "python3 -c 'import os; os.setuid(0); os.system(\"/bin/bash\")'",
         "cves": ["CVE-2021-4034", "CVE-2019-14287"],
         "remediation": "Remove cap_setuid from all non-essential binaries. Audit with: getcap -r / 2>/dev/null"
     },
     "cap_setgid": {
         "severity": "HIGH", "base_score": 8.0,
-        "description": "Allows setting arbitrary GID — attacker can join privileged groups (shadow, disk, docker).",
+        "description": "Allows setting arbitrary GID. Attacker can join privileged groups (shadow, disk, docker).",
         "exploit": "Switch to GID of shadow group to read /etc/shadow hashes",
         "cves": ["CVE-2021-4034"],
         "remediation": "Remove cap_setgid. Ensure binaries only have minimum required capabilities."
     },
     "cap_dac_override": {
         "severity": "HIGH", "base_score": 7.5,
-        "description": "Bypasses all file read/write/execute permission checks — can read /etc/shadow, /root/.",
+        "description": "Bypasses all file read/write/execute permission checks. Can read /etc/shadow, /root/.",
         "exploit": "Read /etc/shadow, overwrite /etc/passwd, modify SUID binaries",
         "cves": ["CVE-2023-4911", "CVE-2016-1247"],
         "remediation": "Remove cap_dac_override. Use ACLs for specific file access instead."
     },
     "cap_dac_read_search": {
         "severity": "HIGH", "base_score": 7.0,
-        "description": "Bypasses file read and directory search permission checks — allows reading any file.",
+        "description": "Bypasses file read and directory search permission checks. Allows reading any file.",
         "exploit": "tar -czf /tmp/shadow.tar.gz /etc/shadow",
         "cves": ["CVE-2014-8990"],
         "remediation": "Remove cap_dac_read_search. Restrict to specific backup tools only."
     },
     "cap_net_admin": {
         "severity": "MEDIUM", "base_score": 6.5,
-        "description": "Full network configuration access — can modify routing, firewall rules, sniff traffic.",
+        "description": "Full network configuration access. Can modify routing, firewall rules, sniff traffic.",
         "exploit": "iptables -F (flush all firewall rules), ARP spoofing, traffic capture",
         "cves": ["CVE-2020-14386", "CVE-2016-8655"],
         "remediation": "Limit to network management daemons only. Never assign to scripting languages."
     },
     "cap_net_raw": {
         "severity": "MEDIUM", "base_score": 6.0,
-        "description": "Allows raw socket creation — enables network sniffing, spoofing, and ICMP manipulation.",
+        "description": "Allows raw socket creation. Enables network sniffing, spoofing, and ICMP manipulation.",
         "exploit": "tcpdump credential capture, ARP/ICMP spoofing, packet injection",
         "cves": ["CVE-2020-14386"],
         "remediation": "Limit cap_net_raw to specific tools (ping, tcpdump). Never assign broadly."
     },
     "cap_sys_ptrace": {
         "severity": "HIGH", "base_score": 8.5,
-        "description": "Allows ptrace on any process — can inject code into running processes including root-owned ones.",
+        "description": "Allows ptrace on any process. Can inject code into running processes including root-owned ones.",
         "exploit": "Inject shellcode into /sbin/init or any privileged process",
         "cves": ["CVE-2019-13272", "CVE-2021-3492"],
         "remediation": "Remove cap_sys_ptrace. Set sysctl kernel.yama.ptrace_scope=2."
     },
     "cap_sys_module": {
         "severity": "CRITICAL", "base_score": 9.8,
-        "description": "Allows loading/unloading kernel modules — complete kernel code execution as root.",
-        "exploit": "insmod /tmp/rootkit.ko — full kernel rootkit installation",
+        "description": "Allows loading/unloading kernel modules. Complete kernel code execution as root.",
+        "exploit": "insmod /tmp/rootkit.ko - full kernel rootkit installation",
         "cves": ["CVE-2019-2025"],
         "remediation": "Remove immediately. Lock kernel modules: sysctl kernel.modules_disabled=1"
     },
     "cap_chown": {
         "severity": "HIGH", "base_score": 7.8,
-        "description": "Allows changing file ownership arbitrarily — can take ownership of any file.",
+        "description": "Allows changing file ownership arbitrarily. Can take ownership of any file.",
         "exploit": "chown attacker /etc/shadow && read hashes",
         "cves": ["CVE-2021-4034"],
         "remediation": "Remove cap_chown from non-essential binaries. Audit carefully."
@@ -128,34 +128,34 @@ CAP_DB = {
     "cap_fowner": {
         "severity": "MEDIUM", "base_score": 6.5,
         "description": "Bypasses permission checks for operations requiring file ownership match.",
-        "exploit": "chmod 777 /etc/shadow — make sensitive files world-readable",
+        "exploit": "chmod 777 /etc/shadow - make sensitive files world-readable",
         "cves": [],
         "remediation": "Remove cap_fowner. Use targeted file ACLs instead."
     },
     "cap_sys_rawio": {
         "severity": "CRITICAL", "base_score": 9.2,
-        "description": "Raw I/O access to block devices — can read/write raw disk including /dev/sda.",
-        "exploit": "dd if=/dev/sda | grep -a password — extract credentials from raw disk",
+        "description": "Raw I/O access to block devices. Can read/write raw disk including /dev/sda.",
+        "exploit": "dd if=/dev/sda | grep -a password - extract credentials from raw disk",
         "cves": [],
         "remediation": "Remove immediately. Never assign to user-accessible binaries."
     },
     "cap_kill": {
         "severity": "LOW", "base_score": 3.5,
-        "description": "Allows sending signals to any process — can kill critical system daemons.",
+        "description": "Allows sending signals to any process. Can kill critical system daemons.",
         "exploit": "kill -9 1 (kill init/systemd) causing system crash",
         "cves": [],
         "remediation": "Restrict to specific process management tools only."
     },
     "cap_sys_chroot": {
         "severity": "MEDIUM", "base_score": 6.0,
-        "description": "Allows chroot to arbitrary directories — combined with other caps can escape sandbox.",
+        "description": "Allows chroot to arbitrary directories. Combined with other caps can escape sandbox.",
         "exploit": "chroot escape combined with cap_sys_admin or writable filesystem",
         "cves": ["CVE-2015-1318"],
         "remediation": "Remove cap_sys_chroot or combine with seccomp/AppArmor restrictions."
     },
     "cap_audit_write": {
         "severity": "LOW", "base_score": 3.0,
-        "description": "Allows writing to kernel audit log — can be used to obscure attack traces.",
+        "description": "Allows writing to kernel audit log. Can be used to obscure attack traces.",
         "exploit": "Inject false audit entries to cover tracks during an attack",
         "cves": [],
         "remediation": "Only assign to audit daemons. Monitor audit log integrity."
@@ -218,10 +218,10 @@ def get_capabilities():
         )
         return [l for l in result.stdout.strip().split("\n") if l.strip()]
     except FileNotFoundError:
-        print(c(Color.YELLOW, "  ⚠  'getcap' not found. Install: apt install libcap2-bin"))
+        print(c(Color.YELLOW, "  'getcap' not found. Install: apt install libcap2-bin"))
         return []
     except Exception as e:
-        print(c(Color.RED, f"  ✖  getcap error: {e}"))
+        print(c(Color.RED, f"  getcap error: {e}"))
         return []
 
 def parse_cap_line(line):
@@ -279,7 +279,7 @@ def analyze_capabilities(lines):
                 "bash", "sh", "dash", "lua", "tcl",
             ])
             if is_interp:
-                risk_factors.append("scripting interpreter — trivial exploitation")
+                risk_factors.append("scripting interpreter - trivial exploitation")
                 score = min(score + 0.5, 10.0)
 
             findings.append({
@@ -350,7 +350,7 @@ def print_sysinfo(mode_label):
 
 def print_findings(findings):
     if not findings:
-        print(c(Color.GREEN+Color.BOLD, "\n  ✔  No dangerous capabilities found.\n"))
+        print(c(Color.GREEN+Color.BOLD, "\n  No dangerous capabilities found.\n"))
         return
     groups = {"CRITICAL": [], "HIGH": [], "MEDIUM": [], "LOW": []}
     for f in findings:
@@ -365,12 +365,12 @@ def print_findings(findings):
             "MEDIUM":   Color.YELLOW+Color.BOLD,
             "LOW":      Color.GREEN,
         }.get(sev, Color.GRAY)
-        print(f"\n{sev_color}  ── {sev} ({len(group)}) ──{Color.RESET}")
+        print(f"\n{sev_color}  -- {sev} ({len(group)}) --{Color.RESET}")
         for f in group:
-            interp_icon = c(Color.RED+Color.BOLD, " 🐍INTERPRETER") if f["is_interpreter"] else ""
-            ww_icon     = c(Color.ORANGE, " ✎WRITABLE")              if f["world_writable"] else ""
-            suid_icon   = c(Color.YELLOW, " ⚑SUID")                  if f["suid"] else ""
-            print(f"\n  {c(Color.RED+Color.BOLD,'✖')}  "
+            interp_icon = c(Color.RED+Color.BOLD, " [INTERPRETER]") if f["is_interpreter"] else ""
+            ww_icon     = c(Color.ORANGE, " [WRITABLE]")            if f["world_writable"] else ""
+            suid_icon   = c(Color.YELLOW, " [SUID]")                if f["suid"] else ""
+            print(f"\n  {c(Color.RED+Color.BOLD,'[!]')}  "
                   f"{c(Color.WHITE+Color.BOLD, f['binary'])}"
                   f"{interp_icon}{ww_icon}{suid_icon}")
             print(f"     {c(Color.GRAY,'Capability :')} "
@@ -380,15 +380,15 @@ def print_findings(findings):
             print(f"     {c(Color.GRAY,'Description:')} "
                   f"{f['description'][:80]}{'...' if len(f['description'])>80 else ''}")
             if f["risk_factors"]:
-                print(f"     {c(Color.ORANGE,'⚠  Factors  :')} "
+                print(f"     {c(Color.ORANGE,'[!] Factors :')} "
                       f"{c(Color.YELLOW,' | '.join(f['risk_factors'][:3]))}")
             if f["exploit_hint"]:
-                print(f"     {c(Color.RED,'💀 Exploit  :')} "
+                print(f"     {c(Color.RED,'[X] Exploit :')} "
                       f"{c(Color.GRAY, f['exploit_hint'][:75])}")
             if f["cves"]:
-                print(f"     {c(Color.GRAY,'CVEs       :')} "
+                print(f"     {c(Color.GRAY,'CVEs        :')} "
                       f"{'  '.join(c(Color.CYAN, cv) for cv in f['cves'][:3])}")
-            print(f"     {c(Color.GREEN,'✦  Fix      :')} "
+            print(f"     {c(Color.GREEN,'[+] Fix     :')} "
                   f"{c(Color.GRAY, f['remediation'][:80])}")
 
 def print_summary(findings):
@@ -440,7 +440,7 @@ def save_json_report(findings):
         return "NONE"
 
     report = {
-        "tool":      "COSVINTE — Linux Capability Scanner",
+        "tool":      "COSVINTE - Linux Capability Scanner",
         "timestamp": datetime.now().isoformat(),
         "system": {
             "hostname": platform.node(),
@@ -481,6 +481,13 @@ class CosvinteReport(FPDF):
     def __init__(self):
         super().__init__(orientation='P', unit='mm', format='A4')
         self.set_auto_page_break(auto=True, margin=20)
+        # DejaVu เป็น Unicode font ที่รองรับตัวอักษรพิเศษได้ครบถ้วน
+        # fpdf2 มี font นี้ built-in อยู่แล้ว ไม่ต้องดาวน์โหลดเพิ่ม
+        self.add_font("DejaVu",  style="",  fname="DejaVuSansCondensed.ttf")
+        self.add_font("DejaVu",  style="B", fname="DejaVuSansCondensed-Bold.ttf")
+        self.add_font("DejaVu",  style="I", fname="DejaVuSansCondensed-Oblique.ttf")
+        self.add_font("DejaVuM", style="",  fname="DejaVuSansMono.ttf")
+        self.add_font("DejaVuM", style="B", fname="DejaVuSansMono-Bold.ttf")
 
     def header(self):
         # หน้าแรกเป็น cover ไม่ต้องการ header bar
@@ -488,10 +495,10 @@ class CosvinteReport(FPDF):
             return
         self.set_fill_color(*self.COLOR_DARK_BG)
         self.rect(0, 0, 210, 14, style='F')
-        self.set_font("Helvetica", style='B', size=8)
+        self.set_font("DejaVu", style='B', size=8)
         self.set_text_color(*self.COLOR_ACCENT)
         self.set_xy(10, 4)
-        self.cell(0, 6, "COSVINTE — Linux Capability Security Report", align='L')
+        self.cell(0, 6, "COSVINTE - Linux Capability Security Report", align='L')
         self.set_text_color(150, 150, 170)
         self.set_xy(0, 4)
         self.cell(200, 6, datetime.now().strftime("%Y-%m-%d"), align='R')
@@ -509,10 +516,10 @@ class CosvinteReport(FPDF):
         self.set_line_width(0.3)
         self.line(10, self.get_y(), 200, self.get_y())
         self.ln(1)
-        self.set_font("Helvetica", style='I', size=7)
+        self.set_font("DejaVu", style='I', size=7)
         self.set_text_color(150, 150, 150)
         self.set_x(10)
-        self.cell(95, 5, "CONFIDENTIAL — For Authorized Personnel Only", align='L')
+        self.cell(95, 5, "CONFIDENTIAL - For Authorized Personnel Only", align='L')
         self.cell(95, 5, f"Page {self.page_no()}", align='R')
 
     def severity_color(self, sev: str) -> tuple:
@@ -534,7 +541,7 @@ class CosvinteReport(FPDF):
         else:            fc = self.COLOR_LOW
         self.set_fill_color(*fc)
         self.rect(x, y, filled_w, 3.5, style='F')
-        self.set_font("Helvetica", style='B', size=8)
+        self.set_font("DejaVu", style='B', size=8)
         self.set_text_color(*fc)
         self.set_xy(x + bar_w + 2, y - 1)
         self.cell(14, 6, f"{score:.1f}/10", align='L')
@@ -547,7 +554,7 @@ class CosvinteReport(FPDF):
         self.set_fill_color(*self.COLOR_ACCENT)
         self.rect(10, bar_y, 2.5, 9, style='F')
         prefix = f"{section_num:02d}. " if section_num else ""
-        self.set_font("Helvetica", style='B', size=13)
+        self.set_font("DejaVu", style='B', size=13)
         self.set_text_color(*self.COLOR_DARK_BG)
         self.set_xy(15, bar_y)
         self.cell(0, 9, f"{prefix}{title.upper()}", align='L')
@@ -570,7 +577,7 @@ class CosvinteReport(FPDF):
         self.rect(10, y, 190, box_h, style='F')
         self.set_fill_color(*border_color)
         self.rect(10, y, 1.8, box_h, style='F')
-        self.set_font("Helvetica", size=8.5)
+        self.set_font("DejaVu", size=8.5)
         self.set_text_color(*text_color)
         self.set_xy(14, y + 3)
         self.multi_cell(183, 5, text)
@@ -596,12 +603,12 @@ def build_cover_page(pdf: CosvinteReport, findings: list, mode_label: str):
     pdf.set_fill_color(*CosvinteReport.COLOR_DARK_BG)
     pdf.rect(0, 0, 210, 145, style='F')
 
-    pdf.set_font("Helvetica", style='B', size=38)
+    pdf.set_font("DejaVu", style='B', size=38)
     pdf.set_text_color(*CosvinteReport.COLOR_ACCENT)
     pdf.set_xy(0, 30)
     pdf.cell(210, 16, "COSVINTE", align='C')
 
-    pdf.set_font("Helvetica", style='I', size=12)
+    pdf.set_font("DejaVu", style='I', size=12)
     pdf.set_text_color(160, 175, 205)
     pdf.set_xy(0, 48)
     pdf.cell(210, 8, "Linux Capability Vulnerability Scanner", align='C')
@@ -610,7 +617,7 @@ def build_cover_page(pdf: CosvinteReport, findings: list, mode_label: str):
     pdf.set_line_width(0.8)
     pdf.line(55, 60, 155, 60)
 
-    pdf.set_font("Helvetica", style='B', size=15)
+    pdf.set_font("DejaVu", style='B', size=15)
     pdf.set_text_color(240, 240, 255)
     pdf.set_xy(0, 64)
     pdf.cell(210, 10, "SECURITY ASSESSMENT REPORT", align='C')
@@ -627,11 +634,11 @@ def build_cover_page(pdf: CosvinteReport, findings: list, mode_label: str):
     }
     pdf.set_fill_color(*color_map[overall])
     pdf.rect(70, 80, 70, 22, style='F')
-    pdf.set_font("Helvetica", style='B', size=11)
+    pdf.set_font("DejaVu", style='B', size=11)
     pdf.set_text_color(255, 255, 255)
     pdf.set_xy(70, 82)
     pdf.cell(70, 8, f"OVERALL RISK: {overall}", align='C')
-    pdf.set_font("Helvetica", size=9)
+    pdf.set_font("DejaVu", size=9)
     pdf.set_xy(70, 90)
     pdf.cell(70, 8, f"Score: {max_score:.1f} / 10.0", align='C')
 
@@ -650,16 +657,16 @@ def build_cover_page(pdf: CosvinteReport, findings: list, mode_label: str):
         # สีสลับแถวเพื่อให้อ่านง่าย
         pdf.set_fill_color(*(245, 247, 253) if i % 2 == 0 else (255, 255, 255))
         pdf.rect(10, row_y, 190, 11, style='F')
-        pdf.set_font("Helvetica", style='B', size=9)
+        pdf.set_font("DejaVu", style='B', size=9)
         pdf.set_text_color(*CosvinteReport.COLOR_SUBTEXT)
         pdf.set_xy(14, row_y + 2)
         pdf.cell(55, 6, label)
-        pdf.set_font("Helvetica", size=9)
+        pdf.set_font("DejaVu", size=9)
         pdf.set_text_color(*CosvinteReport.COLOR_TEXT)
         pdf.set_xy(70, row_y + 2)
         pdf.cell(128, 6, str(value))
 
-    pdf.set_font("Helvetica", style='I', size=7)
+    pdf.set_font("DejaVu", style='I', size=7)
     pdf.set_text_color(160, 160, 160)
     pdf.set_xy(10, 276)
     pdf.multi_cell(190, 4,
@@ -688,7 +695,7 @@ def build_executive_summary(pdf: CosvinteReport, findings: list):
         f"The overall risk score is {max_score:.1f}/10.0 ({overall}). "
         f"Immediate remediation is required for all CRITICAL and HIGH findings."
     )
-    pdf.set_font("Helvetica", size=10)
+    pdf.set_font("DejaVu", size=10)
     pdf.set_text_color(*CosvinteReport.COLOR_TEXT)
     pdf.set_x(10)
     pdf.multi_cell(190, 6, summary_text)
@@ -707,17 +714,14 @@ def build_executive_summary(pdf: CosvinteReport, findings: list):
         cx = 10 + i * (card_w + gap)
         pdf.set_fill_color(*color)
         pdf.rect(cx, card_y, card_w, card_h, style='F')
-        # ตัวเลข count ใหญ่
-        pdf.set_font("Helvetica", style='B', size=22)
+        pdf.set_font("DejaVu", style='B', size=22)
         pdf.set_text_color(255, 255, 255)
         pdf.set_xy(cx, card_y + 3)
         pdf.cell(card_w, 12, str(count), align='C')
-        # ชื่อ severity
-        pdf.set_font("Helvetica", style='B', size=8)
+        pdf.set_font("DejaVu", style='B', size=8)
         pdf.set_xy(cx, card_y + 15)
         pdf.cell(card_w, 7, label, align='C')
-        # คำว่า findings
-        pdf.set_font("Helvetica", size=7)
+        pdf.set_font("DejaVu", size=7)
         pdf.set_xy(cx, card_y + 21)
         pdf.cell(card_w, 6, "findings", align='C')
 
@@ -725,7 +729,7 @@ def build_executive_summary(pdf: CosvinteReport, findings: list):
     pdf.set_text_color(*CosvinteReport.COLOR_TEXT)
 
     # Key Risk Highlights
-    pdf.set_font("Helvetica", style='B', size=11)
+    pdf.set_font("DejaVu", style='B', size=11)
     pdf.set_text_color(*CosvinteReport.COLOR_DARK_BG)
     pdf.cell(0, 8, "Key Risk Highlights", align='L')
     pdf.ln(2)
@@ -733,19 +737,19 @@ def build_executive_summary(pdf: CosvinteReport, findings: list):
     highlights = []
     if critical > 0:
         highlights.append(
-            f"{critical} CRITICAL capability assignment(s) found — these grant near-root "
-            f"privileges and must be removed immediately."
+            f"{critical} CRITICAL capability assignment(s) found. "
+            f"These grant near-root privileges and must be removed immediately."
         )
     if interps > 0:
         highlights.append(
             f"{interps} scripting interpreter(s) (Python, Perl, Node, etc.) have dangerous "
-            f"capabilities — exploitable with a single one-liner command."
+            f"capabilities. Exploitable with a single one-liner command."
         )
     ww_count = sum(1 for f in findings if f["world_writable"])
     if ww_count > 0:
         highlights.append(
-            f"{ww_count} world-writable binary(ies) with capabilities detected — "
-            f"any local user can replace the binary and escalate privileges."
+            f"{ww_count} world-writable binary(ies) with capabilities detected. "
+            f"Any local user can replace the binary and escalate privileges."
         )
     highlights.append(
         "All CRITICAL and HIGH findings should be treated as active privilege escalation "
@@ -759,7 +763,7 @@ def build_executive_summary(pdf: CosvinteReport, findings: list):
 
     # Top 5 Risk Table
     pdf.ln(3)
-    pdf.set_font("Helvetica", style='B', size=11)
+    pdf.set_font("DejaVu", style='B', size=11)
     pdf.set_text_color(*CosvinteReport.COLOR_DARK_BG)
     pdf.cell(0, 8, "Top 5 Highest Risk Binaries", align='L')
     pdf.ln(2)
@@ -770,29 +774,33 @@ def build_executive_summary(pdf: CosvinteReport, findings: list):
     # หัวตาราง
     pdf.set_fill_color(*CosvinteReport.COLOR_TABLE_HDR)
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", style='B', size=8.5)
+    pdf.set_font("DejaVu", style='B', size=8.5)
     for h, w in zip(headers, col_widths):
         pdf.cell(w, 8, f"  {h}", border=0, fill=True, align='L')
     pdf.ln()
 
     # แถวข้อมูล top 5
-    pdf.set_font("Helvetica", size=8.5)
+    pdf.set_font("DejaVu", size=8.5)
     for i, f in enumerate(findings[:5]):
         pdf.set_fill_color(*(CosvinteReport.COLOR_ROW_ALT if i % 2 == 0 else (255, 255, 255)))
         pdf.set_text_color(*CosvinteReport.COLOR_TEXT)
         bin_name = f["binary"]
         if len(bin_name) > 32:
             bin_name = "..." + bin_name[-29:]
+                # ต่อจาก pdf.cell(col_widths[0], 7, f"  {bin_name" ที่ค้างไว้
         pdf.cell(col_widths[0], 7, f"  {bin_name}", border=0, fill=True)
         pdf.cell(col_widths[1], 7, f"  {f['capability']}", border=0, fill=True)
+
+        # เปลี่ยนสีตัวเลข score ตาม severity ของ finding นั้น
         sc = pdf.severity_color(f["severity"])
-        pdf.set_text
-                # ต่อจาก pdf.set_text ที่ค้างไว้ใน build_executive_summary
         pdf.set_text_color(*sc)
         pdf.cell(col_widths[2], 7, f"  {f['risk_score']:.1f}", border=0, fill=True)
+
         pdf.set_text_color(*CosvinteReport.COLOR_TEXT)
         pdf.cell(col_widths[3], 7, f"  {f['severity']}", border=0, fill=True)
-        interp_txt = "YES ⚠" if f["is_interpreter"] else "No"
+
+        # แสดง YES หรือ No พร้อมเปลี่ยนสีให้ชัดเจน
+        interp_txt = "YES (!)" if f["is_interpreter"] else "No"
         if f["is_interpreter"]:
             pdf.set_text_color(200, 30, 30)
         else:
@@ -801,6 +809,7 @@ def build_executive_summary(pdf: CosvinteReport, findings: list):
         pdf.set_text_color(*CosvinteReport.COLOR_TEXT)
         pdf.ln()
 
+    # เส้นปิดท้ายตาราง
     pdf.set_draw_color(200, 205, 220)
     pdf.set_line_width(0.2)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
@@ -809,25 +818,26 @@ def build_executive_summary(pdf: CosvinteReport, findings: list):
 def build_detailed_findings(pdf: CosvinteReport, findings: list):
     """
     สร้างหน้า Detailed Findings โดยแต่ละ finding จะถูก render เป็น card
-    ประกอบด้วย header bar, CVSS bar, exploit box สีแดง และ remediation box สีเขียว
-    การออกแบบนี้ทำให้ผู้อ่านเห็นภาพรวมของแต่ละช่องโหว่ได้ทันทีโดยไม่ต้องอ่านทั้งหมด
+    ประกอบด้วย header bar สีเข้ม, CVSS bar, exploit box สีแดงอ่อน
+    และ remediation box สีเขียวอ่อน เพื่อให้ผู้อ่านเห็นภาพรวมได้ทันที
     """
     pdf.add_page()
     pdf.section_header("Detailed Findings", 2)
 
-    pdf.set_font("Helvetica", size=9)
+    pdf.set_font("DejaVu", size=9)
     pdf.set_text_color(*CosvinteReport.COLOR_SUBTEXT)
     pdf.multi_cell(190, 5,
-        "Each finding below represents a Linux capability assigned to a binary that poses "
-        "a security risk. Findings are sorted by risk score (highest first). "
+        "Each finding below represents a Linux capability assigned to a binary "
+        "that poses a security risk. Findings are sorted by risk score (highest first). "
         "Exploit notes are provided for educational purposes to demonstrate real-world impact."
     )
     pdf.ln(3)
 
     for idx, f in enumerate(findings):
 
-        # ตรวจสอบพื้นที่คงเหลือก่อนวาด card
-        # ถ้าเหลือน้อยกว่า 85mm ให้ขึ้นหน้าใหม่เพื่อป้องกัน card ถูกตัดกลาง
+        # ตรวจสอบพื้นที่คงเหลือก่อนวาด card แต่ละอัน
+        # ถ้าเหลือน้อยกว่า 210mm จากด้านบน ให้ขึ้นหน้าใหม่
+        # เพื่อป้องกัน card ถูกตัดกลางระหว่างหน้า
         if pdf.get_y() > 210:
             pdf.add_page()
 
@@ -835,17 +845,17 @@ def build_detailed_findings(pdf: CosvinteReport, findings: list):
         sev_color = pdf.severity_color(f["severity"])
 
         # ── Finding Header Bar ────────────────────────────────
-        # วาด dark bar ความสูง 10mm แล้วใส่ข้อมูลสำคัญทั้งหมดในบรรทัดเดียว
+        # วาด dark bar ความสูง 10mm สำหรับแสดงข้อมูลสำคัญในบรรทัดเดียว
         pdf.set_fill_color(*CosvinteReport.COLOR_DARK_BG)
         pdf.rect(10, card_top, 190, 10, style='F')
 
-        # หมายเลข finding ด้านซ้าย
-        pdf.set_font("Helvetica", style='B', size=9)
+        # หมายเลข finding ด้านซ้ายสุด
+        pdf.set_font("DejaVu", style='B', size=9)
         pdf.set_text_color(*CosvinteReport.COLOR_ACCENT)
         pdf.set_xy(13, card_top + 1.5)
         pdf.cell(12, 7, f"#{idx+1:02d}", align='L')
 
-        # ชื่อ binary path ตรงกลาง
+        # ชื่อ binary path ตัดให้พอดีถ้ายาวเกิน 55 ตัวอักษร
         bin_display = f["binary"]
         if len(bin_display) > 55:
             bin_display = "..." + bin_display[-52:]
@@ -853,46 +863,46 @@ def build_detailed_findings(pdf: CosvinteReport, findings: list):
         pdf.set_xy(25, card_top + 1.5)
         pdf.cell(130, 7, bin_display, align='L')
 
-        # Severity badge ด้านขวาสุด
+        # Severity badge ด้านขวาสุดของ header bar
         pdf.set_fill_color(*sev_color)
         pdf.rect(163, card_top + 1.5, 35, 7, style='F')
-        pdf.set_font("Helvetica", style='B', size=8)
+        pdf.set_font("DejaVu", style='B', size=8)
         pdf.set_text_color(255, 255, 255)
         pdf.set_xy(163, card_top + 2)
         pdf.cell(35, 6, f["severity"], align='C')
 
-        # เลื่อน cursor มาใต้ header bar
+        # เลื่อน cursor มาใต้ header bar เพื่อเริ่มเขียนข้อมูล
         pdf.set_xy(10, card_top + 12)
         pdf.set_text_color(*CosvinteReport.COLOR_TEXT)
 
         # ── Row 1: Capability / Type / Owner ─────────────────
-        pdf.set_font("Helvetica", style='B', size=8)
+        pdf.set_font("DejaVu", style='B', size=8)
         pdf.set_text_color(*CosvinteReport.COLOR_SUBTEXT)
         pdf.cell(28, 5, "Capability :")
-        pdf.set_font("Helvetica", style='B', size=8)
+        pdf.set_font("DejaVu", style='B', size=8)
         pdf.set_text_color(80, 50, 160)
         pdf.cell(52, 5, f["capability"])
 
-        pdf.set_font("Helvetica", style='B', size=8)
+        pdf.set_font("DejaVu", style='B', size=8)
         pdf.set_text_color(*CosvinteReport.COLOR_SUBTEXT)
         pdf.cell(18, 5, "Type :")
-        pdf.set_font("Helvetica", size=8)
+        pdf.set_font("DejaVu", size=8)
         pdf.set_text_color(*CosvinteReport.COLOR_TEXT)
         pdf.cell(42, 5, f["cap_type"])
 
-        pdf.set_font("Helvetica", style='B', size=8)
+        pdf.set_font("DejaVu", style='B', size=8)
         pdf.set_text_color(*CosvinteReport.COLOR_SUBTEXT)
         pdf.cell(16, 5, "Owner :")
-        pdf.set_font("Helvetica", size=8)
+        pdf.set_font("DejaVu", size=8)
         pdf.set_text_color(*CosvinteReport.COLOR_TEXT)
         pdf.cell(30, 5, f["owner"])
         pdf.ln(6.5)
 
         # ── Row 2: CVSS Risk Score Bar ───────────────────────
-        # draw_cvss_bar จะวาดที่พิกัด x,y ที่ระบุ
-        # โดย x มาจากตำแหน่งหลังพิมพ์ label "Risk Score :"
+        # draw_cvss_bar วาด progress bar ที่พิกัด x, y ที่ระบุ
+        # x มาจากตำแหน่งหลังพิมพ์ label "Risk Score :"
         pdf.set_x(10)
-        pdf.set_font("Helvetica", style='B', size=8)
+        pdf.set_font("DejaVu", style='B', size=8)
         pdf.set_text_color(*CosvinteReport.COLOR_SUBTEXT)
         pdf.cell(28, 5, "Risk Score :")
         pdf.draw_cvss_bar(pdf.get_x(), pdf.get_y() + 0.8,
@@ -901,10 +911,10 @@ def build_detailed_findings(pdf: CosvinteReport, findings: list):
 
         # ── Row 3: Description ───────────────────────────────
         pdf.set_x(10)
-        pdf.set_font("Helvetica", style='B', size=8)
+        pdf.set_font("DejaVu", style='B', size=8)
         pdf.set_text_color(*CosvinteReport.COLOR_SUBTEXT)
         pdf.cell(28, 5, "Description :")
-        pdf.set_font("Helvetica", size=8)
+        pdf.set_font("DejaVu", size=8)
         pdf.set_text_color(*CosvinteReport.COLOR_TEXT)
         desc_x = pdf.get_x()
         pdf.set_xy(desc_x, pdf.get_y())
@@ -912,16 +922,16 @@ def build_detailed_findings(pdf: CosvinteReport, findings: list):
         pdf.ln(1)
 
         # ── Exploit Box (พื้นหลังแดงอ่อน) ───────────────────
-        # แสดงเป็น terminal-style command เพื่อให้เห็นว่าโจมตีได้ง่ายแค่ไหน
+        # ขอบซ้ายสีแดงเข้มเป็นสัญญาณอันตราย
+        # ใช้ DejaVuM (Mono) สำหรับ command เพื่อให้ดูเหมือน terminal จริง
         if f["exploit_hint"]:
             ex_y = pdf.get_y()
             pdf.set_fill_color(255, 242, 242)
             pdf.rect(10, ex_y, 190, 13, style='F')
-            # ขอบซ้ายสีแดงเข้ม = สัญญาณอันตราย
             pdf.set_fill_color(*CosvinteReport.COLOR_CRITICAL)
             pdf.rect(10, ex_y, 1.8, 13, style='F')
 
-            pdf.set_font("Helvetica", style='B', size=8)
+            pdf.set_font("DejaVu", style='B', size=8)
             pdf.set_text_color(180, 0, 0)
             pdf.set_xy(14, ex_y + 2)
             pdf.cell(35, 4, "Exploit Vector :")
@@ -930,8 +940,8 @@ def build_detailed_findings(pdf: CosvinteReport, findings: list):
             if len(exploit_txt) > 90:
                 exploit_txt = exploit_txt[:87] + "..."
 
-            # Courier = monospace font ทำให้ดูเหมือน terminal command จริงๆ
-            pdf.set_font("Courier", size=7.5)
+            # DejaVuM คือ monospace font ทำให้ดูเหมือน terminal command จริง
+            pdf.set_font("DejaVuM", size=7.5)
             pdf.set_text_color(120, 0, 0)
             pdf.set_xy(14, ex_y + 7)
             pdf.cell(184, 4, exploit_txt)
@@ -943,7 +953,7 @@ def build_detailed_findings(pdf: CosvinteReport, findings: list):
         # ความกว้าง badge คำนวณจากความยาวข้อความ CVE number
         if f["cves"]:
             pdf.set_x(10)
-            pdf.set_font("Helvetica", style='B', size=8)
+            pdf.set_font("DejaVu", style='B', size=8)
             pdf.set_text_color(*CosvinteReport.COLOR_SUBTEXT)
             pdf.cell(28, 6, "Related CVEs :")
             for cve in f["cves"][:4]:
@@ -952,7 +962,7 @@ def build_detailed_findings(pdf: CosvinteReport, findings: list):
                 badge_w = len(cve) * 2.1 + 5
                 pdf.set_fill_color(220, 236, 255)
                 pdf.rect(cve_x, cve_y, badge_w, 5.5, style='F')
-                pdf.set_font("Helvetica", style='B', size=7.5)
+                pdf.set_font("DejaVu", style='B', size=7.5)
                 pdf.set_text_color(0, 60, 160)
                 pdf.cell(badge_w, 5.5, cve, align='C')
                 pdf.set_x(pdf.get_x() + 2)
@@ -961,20 +971,20 @@ def build_detailed_findings(pdf: CosvinteReport, findings: list):
         # ── Risk Factors ─────────────────────────────────────
         if f["risk_factors"]:
             pdf.set_x(10)
-            pdf.set_font("Helvetica", style='B', size=8)
+            pdf.set_font("DejaVu", style='B', size=8)
             pdf.set_text_color(*CosvinteReport.COLOR_SUBTEXT)
             pdf.cell(28, 5, "Risk Factors :")
-            pdf.set_font("Helvetica", size=8)
+            pdf.set_font("DejaVu", size=8)
             pdf.set_text_color(160, 100, 0)
             pdf.set_x(38)
             pdf.multi_cell(160, 4.5, " | ".join(f["risk_factors"][:3]))
             pdf.ln(1)
 
         # ── Remediation Box (พื้นหลังเขียวอ่อน) ─────────────
-        # ขอบซ้ายสีเขียว = สัญญาณ "ทำสิ่งนี้เพื่อป้องกัน"
-        # ความสูง box คำนวณจากจำนวนบรรทัดของข้อความ remediation
-        rem_y   = pdf.get_y()
-        rem_txt = f["remediation"]
+        # ขอบซ้ายสีเขียวเป็นสัญญาณ "ทำสิ่งนี้เพื่อป้องกัน"
+        # ความสูง box คำนวณจากความยาวข้อความ remediation
+        rem_y     = pdf.get_y()
+        rem_txt   = f["remediation"]
         rem_lines = max(1, len(rem_txt) // 88 + 1)
         rem_h     = rem_lines * 4.5 + 9
 
@@ -983,12 +993,12 @@ def build_detailed_findings(pdf: CosvinteReport, findings: list):
         pdf.set_fill_color(50, 160, 80)
         pdf.rect(10, rem_y, 1.8, rem_h, style='F')
 
-        pdf.set_font("Helvetica", style='B', size=8)
+        pdf.set_font("DejaVu", style='B', size=8)
         pdf.set_text_color(30, 120, 50)
         pdf.set_xy(14, rem_y + 2)
         pdf.cell(35, 4, "Remediation :")
 
-        pdf.set_font("Helvetica", size=8)
+        pdf.set_font("DejaVu", size=8)
         pdf.set_text_color(20, 80, 35)
         pdf.set_xy(14, rem_y + 7)
         pdf.multi_cell(184, 4.5, rem_txt)
@@ -1004,36 +1014,36 @@ def build_detailed_findings(pdf: CosvinteReport, findings: list):
 def build_remediation_checklist(pdf: CosvinteReport, findings: list):
     """
     หน้า Remediation Checklist ออกแบบมาให้ Sysadmin ใช้งานจริง
-    มีทั้ง General Best Practices, per-finding checklist table
+    มี General Best Practices, per-finding checklist table
     และ Verification Commands ในรูปแบบ terminal dark box
     เพื่อให้ copy ไปใช้ได้ทันทีหลังจากแก้ไขแต่ละจุด
     """
     pdf.add_page()
     pdf.section_header("Remediation Checklist", 3)
 
-    pdf.set_font("Helvetica", size=9)
+    pdf.set_font("DejaVu", size=9)
     pdf.set_text_color(*CosvinteReport.COLOR_SUBTEXT)
     pdf.multi_cell(190, 5,
         "Use this checklist to track remediation progress. Items are ordered by severity. "
-        "After each fix, verify with: getcap -r / 2>/dev/null — "
-        "the binary should no longer appear in the output."
+        "After each fix, verify with: getcap -r / 2>/dev/null "
+        "and confirm the binary no longer appears in the output."
     )
     pdf.ln(4)
 
     # ── General Best Practices ────────────────────────────────
-    pdf.set_font("Helvetica", style='B', size=10)
+    pdf.set_font("DejaVu", style='B', size=10)
     pdf.set_text_color(*CosvinteReport.COLOR_DARK_BG)
     pdf.cell(0, 7, "General Best Practices", align='L')
     pdf.ln(2)
 
     best_practices = [
         "Audit all capabilities regularly with: getcap -r / 2>/dev/null",
-        "Apply Principle of Least Privilege — assign only the minimum capability required",
+        "Apply Principle of Least Privilege. Assign only the minimum capability required.",
         "Never assign capabilities to scripting interpreters (Python, Perl, Node, Bash, etc.)",
-        "Use seccomp profiles and AppArmor/SELinux to further constrain capability usage",
+        "Use seccomp profiles and AppArmor/SELinux to further constrain capability usage.",
         "Monitor capability changes with auditd: auditctl -a always,exit -F arch=b64 -S capset",
-        "Remove capabilities with setcap -r /path/to/binary instead of relying on file perms",
-        "Document all legitimate capability assignments with a clear business justification",
+        "Remove capabilities with setcap -r /path/to/binary instead of relying on file perms.",
+        "Document all legitimate capability assignments with a clear business justification.",
     ]
 
     for bp in best_practices:
@@ -1044,7 +1054,7 @@ def build_remediation_checklist(pdf: CosvinteReport, findings: list):
         pdf.set_draw_color(160, 170, 200)
         pdf.set_line_width(0.3)
         pdf.rect(14, row_y + 1.8, 4, 4)
-        pdf.set_font("Helvetica", size=8.5)
+        pdf.set_font("DejaVu", size=8.5)
         pdf.set_text_color(*CosvinteReport.COLOR_TEXT)
         pdf.set_xy(21, row_y + 1.5)
         pdf.cell(177, 5, bp)
@@ -1053,18 +1063,18 @@ def build_remediation_checklist(pdf: CosvinteReport, findings: list):
     pdf.ln(3)
 
     # ── Per-Finding Checklist Table ───────────────────────────
-    pdf.set_font("Helvetica", style='B', size=10)
+    pdf.set_font("DejaVu", style='B', size=10)
     pdf.set_text_color(*CosvinteReport.COLOR_DARK_BG)
     pdf.cell(0, 7, "Finding-Specific Remediation Tasks", align='L')
     pdf.ln(3)
 
-    chk_headers = ["✓", "#", "Binary", "Capability", "Required Action", "Severity"]
+    chk_headers = ["[ ]", "#", "Binary", "Capability", "Required Action", "Severity"]
     chk_widths  = [8, 8, 52, 33, 69, 20]
 
     # หัวตาราง
     pdf.set_fill_color(*CosvinteReport.COLOR_TABLE_HDR)
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", style='B', size=8)
+    pdf.set_font("DejaVu", style='B', size=8)
     for h, w in zip(chk_headers, chk_widths):
         pdf.cell(w, 8, f" {h}", border=0, fill=True)
     pdf.ln()
@@ -1078,26 +1088,26 @@ def build_remediation_checklist(pdf: CosvinteReport, findings: list):
         bg    = CosvinteReport.COLOR_ROW_ALT if i % 2 == 0 else (255, 255, 255)
         pdf.set_fill_color(*bg)
 
-        # คอลัมน์ checkbox
+        # คอลัมน์ checkbox วาดกล่องสี่เหลี่ยมด้วย rect แทนการใช้ตัวอักษรพิเศษ
         pdf.cell(chk_widths[0], 7, "", border=0, fill=True)
         pdf.set_draw_color(160, 170, 200)
         pdf.set_line_width(0.25)
         pdf.rect(11.5, row_y + 1.5, 4, 4)
 
-        # หมายเลข
-        pdf.set_font("Helvetica", style='B', size=8)
+        # หมายเลข finding
+        pdf.set_font("DejaVu", style='B', size=8)
         pdf.set_text_color(*CosvinteReport.COLOR_SUBTEXT)
         pdf.cell(chk_widths[1], 7, f" {i+1:02d}", border=0, fill=True)
 
-        # basename ของ binary เพื่อให้พอดีคอลัมน์
+        # basename ของ binary ตัดให้พอดีคอลัมน์
         bin_short = os.path.basename(f["binary"])
         if len(bin_short) > 26:
             bin_short = bin_short[:23] + "..."
-        pdf.set_font("Helvetica", size=8)
+        pdf.set_font("DejaVu", size=8)
         pdf.set_text_color(*CosvinteReport.COLOR_TEXT)
         pdf.cell(chk_widths[2], 7, f" {bin_short}", border=0, fill=True)
 
-        # capability name
+        # capability name สีม่วงเพื่อให้โดดเด่น
         pdf.set_text_color(80, 50, 160)
         pdf.cell(chk_widths[3], 7, f" {f['capability']}", border=0, fill=True)
 
@@ -1108,10 +1118,10 @@ def build_remediation_checklist(pdf: CosvinteReport, findings: list):
         pdf.set_text_color(*CosvinteReport.COLOR_TEXT)
         pdf.cell(chk_widths[4], 7, f" {action}", border=0, fill=True)
 
-        # severity badge สี
+        # severity ใช้สีตาม severity_color
         sc = pdf.severity_color(f["severity"])
         pdf.set_text_color(*sc)
-        pdf.set_font("Helvetica", style='B', size=7.5)
+        pdf.set_font("DejaVu", style='B', size=7.5)
         pdf.cell(chk_widths[5], 7, f" {f['severity']}", border=0, fill=True)
         pdf.set_text_color(*CosvinteReport.COLOR_TEXT)
         pdf.ln()
@@ -1121,13 +1131,13 @@ def build_remediation_checklist(pdf: CosvinteReport, findings: list):
     if pdf.get_y() > 220:
         pdf.add_page()
 
-    pdf.set_font("Helvetica", style='B', size=10)
+    pdf.set_font("DejaVu", style='B', size=10)
     pdf.set_text_color(*CosvinteReport.COLOR_DARK_BG)
     pdf.cell(0, 7, "Verification Commands", align='L')
     pdf.ln(3)
 
     # แสดงแต่ละ command เป็น dark terminal box
-    # สีเขียวของ command text เลียนแบบ terminal จริงเพื่อให้ copy ได้ง่าย
+    # comment สีเทาอ่อนอยู่บรรทัดแรก ตาม command สีเขียวบรรทัดสอง
     verify_cmds = [
         ("List all capabilities system-wide",
          "getcap -r / 2>/dev/null"),
@@ -1147,15 +1157,16 @@ def build_remediation_checklist(pdf: CosvinteReport, findings: list):
         if pdf.get_y() > 255:
             pdf.add_page()
         box_y = pdf.get_y()
+        # dark background เลียนแบบ terminal จริง
         pdf.set_fill_color(*CosvinteReport.COLOR_DARK_BG)
         pdf.rect(10, box_y, 190, 14, style='F')
-        # คำอธิบาย command สีเทาอ่อน
-        pdf.set_font("Helvetica", size=7.5)
+        # comment บรรทัดแรก สีเทาอ่อน
+        pdf.set_font("DejaVu", size=7.5)
         pdf.set_text_color(160, 175, 210)
         pdf.set_xy(14, box_y + 2)
         pdf.cell(184, 4, f"# {desc}")
-        # ตัว command สีเขียว monospace เหมือน terminal จริง
-        pdf.set_font("Courier", style='B', size=8.5)
+        # command บรรทัดสอง สีเขียว monospace
+        pdf.set_font("DejaVuM", style='B', size=8.5)
         pdf.set_text_color(80, 220, 120)
         pdf.set_xy(14, box_y + 7)
         pdf.cell(184, 4, cmd)
@@ -1179,10 +1190,9 @@ def build_remediation_checklist(pdf: CosvinteReport, findings: list):
 # ==============================
 def save_pdf_report(findings: list, mode_label: str) -> str:
     """
-    ฟังก์ชันหลักที่เรียก page builders ทั้ง 4 ตามลำดับ แล้วบันทึกไฟล์
-    โครงสร้าง PDF: Cover → Executive Summary → Detailed Findings → Checklist
+    ฟังก์ชันหลักที่เรียก page builders ทั้ง 4 ตามลำดับแล้วบันทึกไฟล์
+    โครงสร้าง PDF: Cover -> Executive Summary -> Detailed Findings -> Checklist
     ไฟล์จะถูกบันทึกในโฟลเดอร์ reports/ ข้างๆ ไฟล์ .py นี้เสมอ
-    ไม่ว่าจะรันจาก directory ไหนก็ตาม
     """
     pdf = CosvinteReport()
 
@@ -1193,8 +1203,8 @@ def save_pdf_report(findings: list, mode_label: str) -> str:
     build_detailed_findings(pdf, findings)
     build_remediation_checklist(pdf, findings)
 
-    # __file__ คือ path ของไฟล์ .py นี้
     # ใช้ dirname + abspath เพื่อให้ได้ path ที่แน่นอนเสมอ
+    # ไม่ว่าจะรันสคริปต์นี้จาก directory ไหนก็ตาม
     script_dir = os.path.dirname(os.path.abspath(__file__))
     report_dir = os.path.join(script_dir, "reports")
     os.makedirs(report_dir, exist_ok=True)
@@ -1209,14 +1219,14 @@ def save_pdf_report(findings: list, mode_label: str) -> str:
 
 
 # ==============================
-# MAIN — Entry Point
+# MAIN - Entry Point
 # ==============================
 def main():
     print_banner()
 
     print(c(Color.CYAN+Color.BOLD, "  Select Mode:"))
-    print(f"  {c(Color.WHITE,'1')} {c(Color.GRAY,'─')} Real Scan  (getcap -r /)")
-    print(f"  {c(Color.WHITE,'2')} {c(Color.GRAY,'─')} Lab Simulation (safe demo)\n")
+    print(f"  {c(Color.WHITE,'1')} {c(Color.GRAY,'-')} Real Scan  (getcap -r /)")
+    print(f"  {c(Color.WHITE,'2')} {c(Color.GRAY,'-')} Lab Simulation (safe demo)\n")
 
     mode = input(c(Color.CYAN, "  Enter choice [1/2]: ")).strip()
 
@@ -1231,22 +1241,22 @@ def main():
 
     print_sysinfo(mode_label)
 
-    # วิเคราะห์ capabilities ทั้งหมดที่พบ
+    # วิเคราะห์ capabilities ทั้งหมดที่พบจาก getcap หรือ lab simulation
     print(c(Color.CYAN, "  [*] Analyzing capabilities..."), end="", flush=True)
     findings = analyze_capabilities(lines)
     print(c(Color.GREEN, f" {len(findings)} findings\n"))
 
-    # แสดงผลใน terminal
+    # แสดงผลใน terminal ก่อน
     print_findings(findings)
     print_summary(findings)
 
-    # บันทึก JSON report
+    # บันทึก JSON report สำหรับการ parse ต่อด้วย tool อื่น
     json_path = save_json_report(findings)
-    print(c(Color.GRAY, f"  JSON  saved → {c(Color.WHITE+Color.BOLD, json_path)}"))
+    print(c(Color.GRAY, f"  JSON  saved -> {c(Color.WHITE+Color.BOLD, json_path)}"))
 
-    # บันทึก PDF report — ไฟล์จะอยู่ใน reports/ อัตโนมัติ
+    # บันทึก PDF report สำหรับรายงานทางการ
     pdf_path = save_pdf_report(findings, mode_label)
-    print(c(Color.GRAY, f"  PDF   saved → {c(Color.WHITE+Color.BOLD, pdf_path)}\n"))
+    print(c(Color.GRAY, f"  PDF   saved -> {c(Color.WHITE+Color.BOLD, pdf_path)}\n"))
 
 
 if __name__ == "__main__":
