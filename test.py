@@ -7,7 +7,7 @@
 ╚██████╗╚██████╔╝███████║ ╚████╔╝ ██║██║ ╚████║   ██║   ███████╗
  ╚═════╝ ╚═════╝ ╚══════╝  ╚═══╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝
 
-  COSVINTE — Linux Capability Scanner  |  "Conquer Vulnerabilities"
+  COSVINTE — PATH Hijack Scanner  |  "Conquer Vulnerabilities"
 """
 
 import os
@@ -32,8 +32,8 @@ class Color:
     WHITE   = "\033[97m"
     GRAY    = "\033[90m"
     ORANGE  = "\033[38;5;208m"
+    BLUE    = "\033[94m"
     BG_RED  = "\033[41m"
-    BG_YELLOW = "\033[43m"
 
 def c(color, text):
     return f"{color}{text}{Color.RESET}"
@@ -42,7 +42,7 @@ def severity_badge(sev):
     colors = {
         "CRITICAL": Color.BG_RED + Color.BOLD,
         "HIGH":     Color.RED + Color.BOLD,
-        "MEDIUM":   Color.YELLOW + Color.BOLD,
+        "MEDIUM":   Color.YELLOW,
         "LOW":      Color.GREEN,
     }
     return f"{colors.get(sev, Color.GRAY)} {sev} {Color.RESET}"
@@ -50,254 +50,335 @@ def severity_badge(sev):
 def cvss_bar(score, width=20):
     filled = int((score / 10.0) * width)
     bar = "█" * filled + "░" * (width - filled)
-    if score >= 9:   color = Color.BG_RED + Color.BOLD
-    elif score >= 7: color = Color.RED
-    elif score >= 4: color = Color.YELLOW
-    else:            color = Color.GREEN
+    color = Color.RED if score >= 7 else (Color.YELLOW if score >= 4 else Color.GREEN)
     return f"{color}{bar}{Color.RESET} {Color.BOLD}{score:.1f}{Color.RESET}"
 
 # ==============================
-# Capability Risk Database
-# Full description + CVE mapping + exploit notes
+# CVE Database
 # ==============================
-CAP_DB = {
-    "cap_sys_admin": {
-        "severity": "CRITICAL",
-        "base_score": 9.5,
-        "description": "Effectively equivalent to root. Allows mount, pivot_root, kernel module load, arbitrary namespace ops.",
-        "description_th": "เทียบเท่า root โดยสมบูรณ์ ช่วยให้สามารถ mount filesystem, โหลด kernel module, จัดการ namespace ได้อย่างอิสระ",
-        "impact_th": "ผู้โจมตีสามารถหลบหนีออกจาก container, ฝัง rootkit ระดับ kernel, และยึดครองระบบทั้งหมดได้",
-        "exploit": "docker escape, kernel module injection, overlay mount abuse",
-        "cves": ["CVE-2022-0492", "CVE-2022-25636", "CVE-2021-22555"],
-        "remediation": "Remove cap_sys_admin. Use specific caps instead. Never assign to untrusted binaries.",
-        "prevention_th": [
-            "ลบ cap_sys_admin ออกจากทุก binary ที่ไม่จำเป็น",
-            "ใช้ capability เฉพาะเจาะจงแทน เช่น cap_net_admin สำหรับงาน network เท่านั้น",
-            "เปิดใช้ AppArmor หรือ SELinux เพื่อจำกัดสิทธิ์เพิ่มเติม",
-            "ตรวจสอบสม่ำเสมอด้วย: getcap -r / 2>/dev/null",
-        ],
-    },
-    "cap_setuid": {
-        "severity": "CRITICAL",
-        "base_score": 9.0,
-        "description": "Allows setting arbitrary UID — attacker can switch to UID 0 (root) at will.",
-        "description_th": "อนุญาตให้เปลี่ยน UID เป็นค่าใดก็ได้ รวมถึง UID 0 (root) ทำให้ผู้โจมตียกระดับสิทธิ์เป็น root ได้ทันที",
-        "impact_th": "หาก binary นี้เป็น scripting interpreter เช่น python หรือ perl ผู้โจมตีสามารถรัน os.setuid(0) เพื่อเป็น root ได้ในทันที",
-        "exploit": "python3 -c 'import os; os.setuid(0); os.system(\"/bin/bash\")'",
-        "cves": ["CVE-2021-4034", "CVE-2019-14287"],
-        "remediation": "Remove cap_setuid from all non-essential binaries. Audit with: getcap -r / 2>/dev/null",
-        "prevention_th": [
-            "ลบ cap_setuid ออกจาก interpreter ทุกตัว (python, perl, ruby, node ฯลฯ) ทันที",
-            "ตรวจสอบ binary ทั้งหมดด้วย: getcap -r / 2>/dev/null | grep setuid",
-            "ใช้ sudo ที่กำหนดสิทธิ์แบบ least-privilege แทนการใช้ capability",
-            "เปิดใช้ audit log เพื่อตรวจจับการเปลี่ยน UID ผิดปกติ: auditctl -a always,exit -F arch=b64 -S setuid",
-        ],
-    },
-    "cap_setgid": {
+CVE_DB = [
+    {
+        "cve": "CVE-2021-4034",
+        "name": "PwnKit — pkexec ENV Injection",
+        "category": "SUID / Polkit",
+        "description": "pkexec fails to handle argv/envp correctly, allowing environment variable injection to load malicious shared objects as root.",
+        "description_th": "pkexec จัดการ argv/envp ไม่ถูกต้อง ทำให้ผู้โจมตีสามารถ inject environment variable เพื่อโหลด shared object ที่เป็นอันตรายในฐานะ root",
+        "impact_th": "ผู้ใช้งานทั่วไป (non-root) สามารถยกระดับสิทธิ์เป็น root ได้ทันทีบน Linux distribution แทบทุกตัว เนื่องจาก pkexec มักถูกติดตั้งแบบ SUID เป็นค่าเริ่มต้น",
+        "cvss": 7.8,
         "severity": "HIGH",
-        "base_score": 8.0,
-        "description": "Allows setting arbitrary GID — attacker can join privileged groups (shadow, disk, docker).",
-        "description_th": "อนุญาตให้เปลี่ยน GID เป็นค่าใดก็ได้ ผู้โจมตีสามารถเข้าร่วม group ที่มีสิทธิ์สูง เช่น shadow, disk, หรือ docker",
-        "impact_th": "การเข้าถึง group 'shadow' เปิดให้อ่าน /etc/shadow ได้ ส่วน group 'disk' เปิดให้เข้าถึง raw disk โดยตรง",
-        "exploit": "Switch to GID of 'shadow' group to read /etc/shadow hashes",
-        "cves": ["CVE-2021-4034"],
-        "remediation": "Remove cap_setgid. Ensure binaries only have minimum required capabilities.",
+        "remediation": "Upgrade polkit >= 0.120 or: chmod 0755 /usr/bin/pkexec",
         "prevention_th": [
-            "ลบ cap_setgid ออกจาก binary ที่ไม่จำเป็นต้องเปลี่ยน group",
-            "ตรวจสอบสมาชิกของ group ที่มีสิทธิ์สูง: getent group shadow disk docker",
-            "จำกัดสิทธิ์ /etc/shadow ให้อ่านได้เฉพาะ root: chmod 000 /etc/shadow",
-            "ใช้ PAM module เพื่อจำกัดการเปลี่ยน group",
+            "อัปเกรด polkit เป็นเวอร์ชัน 0.120 ขึ้นไปทันที: apt upgrade policykit-1",
+            "หากอัปเกรดไม่ได้ทันที ให้ถอด SUID bit ชั่วคราว: chmod 0755 /usr/bin/pkexec",
+            "ตรวจสอบว่ามีการ exploit แล้วหรือยัง: ausearch -c pkexec --raw | aureport -f",
+            "ใช้ AppArmor/SELinux profile สำหรับ pkexec เพื่อจำกัด action ที่ทำได้",
         ],
+        "trigger": {
+            "needs_suid_binary": ["pkexec", "polkit"],
+            "needs_writable_path": False,
+            "needs_env_var": []
+        }
     },
-    "cap_dac_override": {
+    {
+        "cve": "CVE-2019-14287",
+        "name": "sudo -u#-1 Runas Bypass",
+        "category": "sudo",
+        "description": "sudo allows a user to run commands as UID -1 (resolves to 0/root) if sudoers allows runas ALL, bypassing restrictions.",
+        "description_th": "sudo อนุญาตให้รัน command ด้วย UID -1 ซึ่ง resolve เป็น UID 0 (root) ได้ เมื่อ sudoers ตั้งค่า runas เป็น ALL ทำให้ข้ามข้อจำกัดที่ตั้งไว้",
+        "impact_th": "ผู้ใช้ที่ได้รับอนุญาตให้รัน sudo ในบางรูปแบบ สามารถใช้ 'sudo -u#-1 /bin/bash' เพื่อได้ root shell แม้จะถูกห้ามรันในฐานะ root โดยตรง",
+        "cvss": 8.8,
         "severity": "HIGH",
-        "base_score": 7.5,
-        "description": "Bypasses all file read/write/execute permission checks — can read /etc/shadow, /root/.",
-        "description_th": "ข้ามการตรวจสอบสิทธิ์ไฟล์ทั้งหมด (read/write/execute) สามารถอ่านหรือเขียนไฟล์ใดก็ได้บนระบบ รวมถึง /etc/shadow และ /root/",
-        "impact_th": "ผู้โจมตีสามารถอ่านไฟล์ password hash, แก้ไข /etc/passwd เพื่อเพิ่ม backdoor account, หรือเขียนทับ binary ที่มี SUID",
-        "exploit": "Read /etc/shadow, overwrite /etc/passwd, modify SUID binaries",
-        "cves": ["CVE-2023-4911", "CVE-2016-1247"],
-        "remediation": "Remove cap_dac_override. Use ACLs for specific file access instead.",
+        "remediation": "Upgrade sudo >= 1.8.28 and audit /etc/sudoers for 'ALL' runas entries.",
         "prevention_th": [
-            "ลบ cap_dac_override และใช้ POSIX ACL เพื่อให้สิทธิ์เฉพาะไฟล์ที่ต้องการแทน",
-            "ตั้งค่า immutable flag ให้ไฟล์สำคัญ: chattr +i /etc/passwd /etc/shadow",
-            "ใช้ IMA (Integrity Measurement Architecture) เพื่อตรวจจับการแก้ไขไฟล์",
-            "ตรวจสอบ integrity ของไฟล์ระบบด้วย AIDE หรือ Tripwire เป็นประจำ",
+            "อัปเกรด sudo เป็นเวอร์ชัน 1.8.28 ขึ้นไป: apt upgrade sudo",
+            "ตรวจสอบ sudoers ทุกบรรทัดที่มี ALL: grep -i 'runas.*all' /etc/sudoers /etc/sudoers.d/*",
+            "หลีกเลี่ยงการใช้ 'ALL' ใน runas spec ให้ระบุ user/group ที่อนุญาตอย่างชัดเจน",
+            "ใช้ 'sudo -l' เพื่อ audit สิทธิ์ที่แต่ละ user มีอยู่เป็นประจำ",
         ],
+        "trigger": {
+            "needs_suid_binary": ["sudo"],
+            "needs_writable_path": False,
+            "needs_env_var": []
+        }
     },
-    "cap_dac_read_search": {
+    {
+        "cve": "CVE-2010-3847",
+        "name": "LD_PRELOAD / LD_AUDIT Hijack",
+        "category": "Dynamic Linker",
+        "description": "SUID binaries that do not sanitize LD_PRELOAD / LD_AUDIT environment variables allow loading attacker-controlled shared libraries as root.",
+        "description_th": "SUID binary ที่ไม่กรอง LD_PRELOAD หรือ LD_AUDIT ออก จะทำให้ dynamic linker โหลด shared library ของผู้โจมตีในฐานะ root",
+        "impact_th": "ผู้โจมตีสร้าง .so file ที่มี malicious code แล้วตั้ง LD_PRELOAD ให้ชี้ไปที่ไฟล์นั้น เมื่อ SUID binary ถูกรัน library จะโหลดโดยอัตโนมัติด้วยสิทธิ์ root",
+        "cvss": 7.2,
         "severity": "HIGH",
-        "base_score": 7.0,
-        "description": "Bypasses file read and directory search permission checks — allows reading any file.",
-        "description_th": "ข้ามการตรวจสอบสิทธิ์การอ่านไฟล์และการค้นหาใน directory ทำให้อ่านไฟล์ใดก็ได้โดยไม่ต้องมีสิทธิ์",
-        "impact_th": "ผู้โจมตีสามารถนำข้อมูลลับออกจากระบบ เช่น private key, config files, database credentials โดยไม่ทิ้งร่องรอยในระบบ permission ปกติ",
-        "exploit": "tar -czf /tmp/shadow.tar.gz /etc/shadow",
-        "cves": ["CVE-2014-8990"],
-        "remediation": "Remove cap_dac_read_search. Restrict to specific backup tools only.",
+        "remediation": "Ensure ld.so ignores LD_PRELOAD for SUID binaries (default in modern glibc). Audit SUID binaries.",
         "prevention_th": [
-            "จำกัด cap_dac_read_search เฉพาะ backup tool ที่ได้รับการตรวจสอบแล้วเท่านั้น",
-            "เข้ารหัสไฟล์ sensitive ด้วย encryption at rest แม้จะถูกอ่านได้ก็ไม่มีประโยชน์",
-            "ใช้ audit log ตรวจจับการเข้าถึงไฟล์ sensitive: auditctl -w /etc/shadow -p r",
-            "แยก sensitive files ไปไว้ใน filesystem ที่มี access control เข้มงวด",
+            "ตรวจสอบว่า glibc เวอร์ชันปัจจุบันกรอง LD_PRELOAD สำหรับ SUID binary โดยอัตโนมัติ",
+            "ลบ environment variable ที่เป็นอันตรายออกจาก shell: unset LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH",
+            "ใช้ env_reset ใน sudoers เพื่อล้าง environment ก่อนรัน sudo: Defaults env_reset",
+            "ตรวจสอบว่าไม่มี LD_PRELOAD ใน /etc/environment, /etc/profile, หรือ .bashrc",
+            "ใช้ seccomp/AppArmor เพื่อจำกัด syscall ที่ SUID binary ใช้ได้",
         ],
+        "trigger": {
+            "needs_suid_binary": [],
+            "needs_writable_path": False,
+            "needs_env_var": ["LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH"]
+        }
     },
-    "cap_net_admin": {
+    {
+        "cve": "CVE-2016-2779",
+        "name": "runuser Insecure PATH",
+        "category": "PATH Hijack",
+        "description": "runuser/su does not sanitize PATH, allowing attackers to place malicious binaries in world-writable PATH dirs that get executed as root.",
+        "description_th": "runuser และ su ไม่ทำการกรอง PATH variable ทำให้ผู้โจมตีวาง binary ปลอมไว้ใน PATH directory ที่ทุกคนเขียนได้ เพื่อให้ถูกรันแทน binary จริงในฐานะ root",
+        "impact_th": "หากมี world-writable directory อยู่ต้น PATH เช่น /tmp ผู้โจมตีวาง binary ชื่อเดียวกับ command ที่ script root ใช้งาน เมื่อ script รัน binary ของผู้โจมตีจะถูกเรียกแทน",
+        "cvss": 7.0,
+        "severity": "HIGH",
+        "remediation": "Remove world-writable directories from PATH. Use absolute paths in scripts.",
+        "prevention_th": [
+            "ลบ world-writable directory ออกจาก PATH ทันที โดยเฉพาะ /tmp และ /var/tmp",
+            "ใช้ path แบบ absolute ใน script ทุกตัว เช่น /usr/bin/python3 แทน python3",
+            "ตั้งค่า secure PATH ใน /etc/environment: PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "ใช้ 'env -i' เมื่อรัน script ที่ต้องการ environment ที่สะอาด",
+            "audit script ที่รันด้วย root privilege ทุกตัวให้ใช้ absolute path",
+        ],
+        "trigger": {
+            "needs_suid_binary": ["su", "runuser"],
+            "needs_writable_path": True,
+            "needs_env_var": []
+        }
+    },
+    {
+        "cve": "CVE-2015-1318",
+        "name": "OverlayFS Local Privilege Escalation",
+        "category": "Filesystem / PATH",
+        "description": "Ubuntu OverlayFS allows unprivileged users to mount overlayfs on arbitrary paths, combined with PATH hijack to escalate privileges.",
+        "description_th": "Ubuntu อนุญาตให้ผู้ใช้ทั่วไป mount overlayfs บน path ใดก็ได้ เมื่อใช้ร่วมกับ PATH hijack ทำให้ยกระดับสิทธิ์ได้",
+        "impact_th": "ผู้โจมตีสร้าง overlayfs layer ที่ซ้อนทับ /bin หรือ /usr/bin เพื่อให้ binary ที่ตัวเองควบคุมถูกรันแทน binary จริง เมื่อมี world-writable PATH directory ร่วมด้วยจะ exploit ได้ง่ายขึ้น",
+        "cvss": 6.5,
         "severity": "MEDIUM",
-        "base_score": 6.5,
-        "description": "Full network configuration access — can modify routing, firewall rules, sniff traffic.",
-        "description_th": "เข้าถึงการตั้งค่า network ทั้งหมด สามารถแก้ไข routing table, กฎ firewall, และดักฟัง traffic ในระบบ",
-        "impact_th": "ผู้โจมตีสามารถล้าง firewall rules เพื่อเปิด port, ทำ ARP spoofing เพื่อดักข้อมูล, หรือ redirect traffic ไปยัง attacker-controlled server",
-        "exploit": "iptables -F (flush all firewall rules), ARP spoofing, traffic capture",
-        "cves": ["CVE-2020-14386", "CVE-2016-8655"],
-        "remediation": "Limit to network management daemons only. Never assign to scripting languages.",
+        "remediation": "Upgrade kernel. Restrict user namespaces: sysctl -w kernel.unprivileged_userns_clone=0",
         "prevention_th": [
-            "จำกัด cap_net_admin เฉพาะ daemon ที่จัดการ network เท่านั้น (เช่น NetworkManager)",
-            "ห้ามกำหนด cap_net_admin ให้กับ scripting interpreter หรือ general-purpose tools",
-            "ใช้ network namespace เพื่อแยก network environment ของแต่ละ process",
-            "ตรวจสอบ firewall rules เป็นประจำ: iptables -L -n -v",
+            "อัปเกรด kernel เป็นเวอร์ชันที่ได้รับการ patch แล้ว",
+            "ปิด unprivileged user namespace: sysctl -w kernel.unprivileged_userns_clone=0",
+            "ทำให้ค่านี้คงอยู่หลัง reboot: echo 'kernel.unprivileged_userns_clone=0' >> /etc/sysctl.conf",
+            "ลบ world-writable directory ออกจาก PATH เพื่อลด attack surface",
         ],
+        "trigger": {
+            "needs_suid_binary": [],
+            "needs_writable_path": True,
+            "needs_env_var": []
+        }
     },
-    "cap_net_raw": {
+    {
+        "cve": "CVE-2017-1000367",
+        "name": "sudo Insecure PATH (Sudosmash)",
+        "category": "sudo / PATH",
+        "description": "sudo on Linux reads /proc/[pid]/stat to determine terminal device. Combined with PATH hijack in writable dir, allows privilege escalation.",
+        "description_th": "sudo อ่าน /proc/[pid]/stat เพื่อระบุ terminal device และมีช่องโหว่ในการ parse ข้อมูลนั้น เมื่อรวมกับ world-writable PATH directory ทำให้ยกระดับสิทธิ์ได้",
+        "impact_th": "ผู้โจมตีสามารถบังคับให้ sudo โหลด binary จาก world-writable directory โดยการสร้าง symlink หรือ file ที่มีชื่อพิเศษ และได้ root shell ในที่สุด",
+        "cvss": 6.3,
         "severity": "MEDIUM",
-        "base_score": 6.0,
-        "description": "Allows raw socket creation — enables network sniffing, spoofing, and ICMP manipulation.",
-        "description_th": "อนุญาตให้สร้าง raw socket ทำให้สามารถดักฟัง network traffic, ปลอมแปลง packet, และจัดการ ICMP ได้โดยตรง",
-        "impact_th": "ผู้โจมตีสามารถดักจับ credentials ที่ส่งผ่าน network, ทำ ARP poisoning เพื่อทำ MITM attack, หรือ inject packet ที่เป็นอันตราย",
-        "exploit": "tcpdump credential capture, ARP/ICMP spoofing, packet injection",
-        "cves": ["CVE-2020-14386"],
-        "remediation": "Limit cap_net_raw to specific tools (ping, tcpdump). Never assign broadly.",
+        "remediation": "Upgrade sudo >= 1.8.21. Ensure no world-writable dirs appear before /usr/bin in PATH.",
         "prevention_th": [
-            "จำกัด cap_net_raw เฉพาะ tool ที่จำเป็นจริงๆ เช่น ping หรือ tcpdump ที่ระบุ path ชัดเจน",
-            "ใช้ network encryption (TLS/HTTPS) ทุกที่เพื่อลดผลกระทบจาก sniffing",
-            "เปิดใช้ Dynamic ARP Inspection บน switch เพื่อป้องกัน ARP spoofing",
-            "Monitor network anomaly ด้วย IDS เช่น Suricata หรือ Snort",
+            "อัปเกรด sudo เป็นเวอร์ชัน 1.8.21 ขึ้นไป",
+            "ตรวจสอบและลบ world-writable directory ออกจาก PATH โดยเฉพาะที่อยู่ก่อน /usr/bin",
+            "ตรวจสอบ PATH ปัจจุบัน: echo $PATH | tr ':' '\\n' | while read p; do ls -ld \"$p\"; done",
+            "ใช้ secure_path ใน sudoers เพื่อ override PATH เสมอ: Defaults secure_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         ],
+        "trigger": {
+            "needs_suid_binary": ["sudo"],
+            "needs_writable_path": True,
+            "needs_env_var": []
+        }
     },
-    "cap_sys_ptrace": {
+    {
+        "cve": "CVE-2023-22809",
+        "name": "sudoedit PATH Arbitrary File Edit",
+        "category": "sudo",
+        "description": "sudoedit allows users to append extra flags controlling the editor. Combined with writable PATH, arbitrary files can be edited as root.",
+        "description_th": "sudoedit อนุญาตให้ผู้ใช้แนบ flag พิเศษเพื่อควบคุม editor ที่ใช้งาน เมื่อใช้ร่วมกับ writable PATH หรือ SUDO_EDITOR ที่ถูก set ผู้โจมตีสามารถแก้ไขไฟล์ใดก็ได้ในฐานะ root",
+        "impact_th": "ผู้โจมตีตั้ง SUDO_EDITOR หรือ VISUAL ให้ชี้ไปยัง script ที่เป็นอันตราย แล้วรัน sudoedit เพื่อให้ script นั้นถูกเรียกด้วยสิทธิ์ root สามารถแก้ไข /etc/passwd หรือ /etc/sudoers ได้",
+        "cvss": 7.8,
         "severity": "HIGH",
-        "base_score": 8.5,
-        "description": "Allows ptrace on any process — can inject code into running processes including root-owned ones.",
-        "description_th": "อนุญาตให้ใช้ ptrace กับ process ใดก็ได้ รวมถึง process ที่ root เป็นเจ้าของ ทำให้สามารถ inject code หรือ dump memory ของ process ที่กำลังทำงานอยู่",
-        "impact_th": "ผู้โจมตีสามารถดึง credentials จาก memory ของ process เช่น password manager หรือ SSH agent, หรือ inject shellcode เข้าสู่ process ที่มีสิทธิ์สูง",
-        "exploit": "Inject shellcode into /sbin/init or any privileged process",
-        "cves": ["CVE-2019-13272", "CVE-2021-3492"],
-        "remediation": "Remove cap_sys_ptrace. Set sysctl kernel.yama.ptrace_scope=2.",
+        "remediation": "Upgrade sudo >= 1.9.12p2. Restrict SUDO_EDITOR and VISUAL env vars.",
         "prevention_th": [
-            "ตั้งค่า kernel.yama.ptrace_scope=2 ใน /etc/sysctl.conf เพื่อจำกัด ptrace",
-            "ลบ cap_sys_ptrace ออกจาก binary ที่ไม่ใช่ debugger โดยเฉพาะ",
-            "ใช้ seccomp profile เพื่อบล็อก ptrace syscall สำหรับ process ที่ไม่จำเป็น",
-            "เปิดใช้ ASLR และ PIE เพื่อเพิ่มความยากในการ exploit แม้จะ ptrace ได้",
+            "อัปเกรด sudo เป็นเวอร์ชัน 1.9.12p2 ขึ้นไปทันที",
+            "เพิ่ม env_delete ใน sudoers เพื่อลบ env var อันตราย: Defaults env_delete+='SUDO_EDITOR VISUAL EDITOR'",
+            "กำหนด editor ที่อนุญาตอย่างชัดเจนใน sudoers: Defaults editor=/usr/bin/nano:/usr/bin/vim",
+            "ตรวจสอบว่า SUDO_EDITOR และ VISUAL ไม่ได้ถูก set ใน environment: env | grep -E 'EDITOR|VISUAL'",
         ],
+        "trigger": {
+            "needs_suid_binary": ["sudo"],
+            "needs_writable_path": False,
+            "needs_env_var": ["SUDO_EDITOR", "VISUAL", "EDITOR"]
+        }
     },
-    "cap_sys_module": {
-        "severity": "CRITICAL",
-        "base_score": 9.8,
-        "description": "Allows loading/unloading kernel modules — complete kernel code execution as root.",
-        "description_th": "อนุญาตให้โหลดหรือถอด kernel module ออก ทำให้สามารถรัน code ระดับ kernel ได้อย่างสมบูรณ์ เทียบเท่ากับการควบคุม OS ทั้งหมด",
-        "impact_th": "ผู้โจมตีสามารถติดตั้ง rootkit ระดับ kernel ที่ซ่อนตัวจาก antivirus และ system monitor, ขโมยข้อมูลทุกอย่างบนระบบ, หรือสร้าง backdoor ถาวร",
-        "exploit": "insmod /tmp/rootkit.ko — full kernel rootkit installation",
-        "cves": ["CVE-2019-2025"],
-        "remediation": "Remove immediately. Lock kernel modules: sysctl kernel.modules_disabled=1",
-        "prevention_th": [
-            "ล็อค kernel modules ทันทีหลัง boot: sysctl -w kernel.modules_disabled=1",
-            "เปิดใช้ Secure Boot และ kernel module signing เพื่อยืนยัน module ก่อนโหลด",
-            "ใช้ DKMS เฉพาะสำหรับ module ที่เชื่อถือได้เท่านั้น",
-            "ตรวจสอบ kernel module ที่โหลดอยู่เป็นประจำ: lsmod | grep -v '^Module'",
-            "พิจารณาใช้ read-only root filesystem เพื่อป้องกันการวาง module ใหม่",
-        ],
-    },
-    "cap_chown": {
+    {
+        "cve": "CVE-2022-0847",
+        "name": "Dirty Pipe — SUID Binary Overwrite",
+        "category": "Kernel / SUID",
+        "description": "Dirty Pipe allows overwriting arbitrary read-only files including SUID binaries via pipe buffer flags, enabling privilege escalation.",
+        "description_th": "ช่องโหว่ใน Linux kernel ทำให้สามารถเขียนทับไฟล์ read-only ใดก็ได้รวมถึง SUID binary ผ่าน pipe buffer โดยไม่ต้องมีสิทธิ์พิเศษ",
+        "impact_th": "ผู้โจมตีเขียนทับ SUID binary เช่น /usr/bin/passwd ด้วย shellcode แล้วรัน binary นั้นเพื่อได้ root shell แม้ไฟล์จะเป็น read-only และ owned by root",
+        "cvss": 7.8,
         "severity": "HIGH",
-        "base_score": 7.8,
-        "description": "Allows changing file ownership arbitrarily — can take ownership of any file including /etc/passwd.",
-        "description_th": "อนุญาตให้เปลี่ยน owner ของไฟล์ใดก็ได้ รวมถึงไฟล์ระบบสำคัญ เช่น /etc/passwd, /etc/shadow, หรือ binary ที่มี SUID",
-        "impact_th": "ผู้โจมตีสามารถยึด ownership ของ /etc/shadow เพื่ออ่าน password hash, หรือ chown binary ที่มี SUID เพื่อแก้ไขและฝัง backdoor",
-        "exploit": "chown attacker /etc/shadow && read hashes",
-        "cves": ["CVE-2021-4034"],
-        "remediation": "Remove cap_chown from non-essential binaries. Audit carefully.",
+        "remediation": "Upgrade kernel >= 5.16.11 / 5.15.25 / 5.10.102",
         "prevention_th": [
-            "ลบ cap_chown ออกจาก binary ทั้งหมดที่ไม่ต้องการจริงๆ",
-            "ตั้งค่า immutable flag ให้ไฟล์ระบบสำคัญ: chattr +i /etc/passwd /etc/shadow /etc/sudoers",
-            "ใช้ filesystem monitoring เพื่อแจ้งเตือนเมื่อ ownership ของไฟล์เปลี่ยน",
-            "ตรวจสอบ ownership ของ SUID binary เป็นประจำ: find / -perm -4000 -ls 2>/dev/null",
+            "อัปเกรด kernel เป็นเวอร์ชัน 5.16.11, 5.15.25, หรือ 5.10.102 ขึ้นไปทันที",
+            "ตรวจสอบเวอร์ชัน kernel ปัจจุบัน: uname -r",
+            "หากอัปเกรดไม่ได้ ลด attack surface โดยลบ SUID binary ที่ไม่จำเป็น",
+            "ใช้ integrity checking เช่น IMA เพื่อตรวจจับการเปลี่ยนแปลง SUID binary",
+            "Monitor kernel exploit attempt ด้วย auditd: auditctl -a always,exit -F arch=b64 -S open -F exit=-EACCES",
         ],
+        "trigger": {
+            "needs_suid_binary": [],
+            "needs_writable_path": False,
+            "needs_env_var": [],
+            "needs_any_suid": True
+        }
     },
-    "cap_fowner": {
+    {
+        "cve": "CVE-2021-3156",
+        "name": "Baron Samedit — sudo Heap Overflow",
+        "category": "sudo",
+        "description": "Heap-based buffer overflow in sudoedit (triggered by trailing backslash) allows unprivileged local users to gain root.",
+        "description_th": "ช่องโหว่ heap buffer overflow ใน sudoedit เกิดจากการจัดการ backslash ที่ท้าย argument ไม่ถูกต้อง ทำให้ผู้ใช้ทั่วไปสามารถรัน code ในฐานะ root",
+        "impact_th": "ผู้โจมตีส่ง argument พิเศษที่มี trailing backslash ไปยัง sudoedit เพื่อ trigger heap overflow แล้วใช้เทคนิค heap exploitation เพื่อรันคำสั่งในฐานะ root โดยไม่ต้องรู้ password",
+        "cvss": 7.8,
+        "severity": "HIGH",
+        "remediation": "Upgrade sudo >= 1.9.5p2",
+        "prevention_th": [
+            "อัปเกรด sudo เป็นเวอร์ชัน 1.9.5p2 ขึ้นไปทันที: apt upgrade sudo",
+            "ตรวจสอบเวอร์ชัน sudo ที่ใช้งานอยู่: sudo --version",
+            "ตรวจสอบว่า exploit แล้วหรือยัง: grep 'sudo' /var/log/auth.log | grep -i 'error\\|segfault'",
+            "ถ้าอัปเกรดไม่ได้ ใช้ aliasas เพื่อ block sudoedit ชั่วคราว",
+        ],
+        "trigger": {
+            "needs_suid_binary": ["sudo"],
+            "needs_writable_path": False,
+            "needs_env_var": []
+        }
+    },
+    {
+        "cve": "CVE-2019-18634",
+        "name": "sudo pwfeedback Stack Overflow",
+        "category": "sudo",
+        "description": "Buffer overflow in sudo pwfeedback feature allows privilege escalation when a user can run sudo commands.",
+        "description_th": "ช่องโหว่ stack buffer overflow ใน sudo เกิดจาก pwfeedback feature ที่แสดง '*' ขณะพิมพ์ password เมื่อรับ input ยาวเกินกำหนดจะเกิด overflow",
+        "impact_th": "ผู้โจมตีส่ง password ยาวมากผ่าน pipe ไปยัง sudo เพื่อ overflow stack buffer แล้วควบคุม execution flow เพื่อได้ root shell",
+        "cvss": 7.8,
+        "severity": "HIGH",
+        "remediation": "Upgrade sudo >= 1.8.31 or disable pwfeedback in sudoers.",
+        "prevention_th": [
+            "อัปเกรด sudo เป็นเวอร์ชัน 1.8.31 ขึ้นไป",
+            "ปิด pwfeedback ใน /etc/sudoers: Defaults !pwfeedback",
+            "ตรวจสอบว่า pwfeedback เปิดอยู่หรือไม่: sudo -l | grep pwfeedback",
+            "ใช้ grep -r 'pwfeedback' /etc/sudoers /etc/sudoers.d/ เพื่อ audit การตั้งค่า",
+        ],
+        "trigger": {
+            "needs_suid_binary": ["sudo"],
+            "needs_writable_path": False,
+            "needs_env_var": []
+        }
+    },
+    {
+        "cve": "CVE-2014-0196",
+        "name": "n_tty Race Condition via SUID",
+        "category": "Kernel / TTY",
+        "description": "Race condition in Linux kernel tty layer allows local privilege escalation; exploitable via SUID tty-attached binaries.",
+        "description_th": "Race condition ใน tty layer ของ Linux kernel ทำให้ผู้โจมตีสามารถใช้ SUID binary ที่ attach กับ tty เพื่อยกระดับสิทธิ์ได้",
+        "impact_th": "ผู้โจมตีใช้ SUID binary เพื่อเปิด tty แล้ว trigger race condition ใน kernel เพื่อ execute code ในฐานะ root — เหมาะสำหรับระบบที่มี SUID binary จำนวนมาก",
+        "cvss": 6.9,
         "severity": "MEDIUM",
-        "base_score": 6.5,
-        "description": "Bypasses permission checks for operations requiring file ownership match.",
-        "description_th": "ข้ามการตรวจสอบสิทธิ์ที่ต้องการให้ผู้ใช้เป็นเจ้าของไฟล์ ทำให้สามารถ chmod, chown, หรือแก้ไข attribute ของไฟล์ที่ตัวเองไม่ได้เป็นเจ้าของ",
-        "impact_th": "ผู้โจมตีสามารถ chmod 777 ไฟล์ sensitive ใดก็ได้ เพื่อให้ทุกคนอ่านได้ หรือแก้ไข permission ของ directory เพื่อฝัง trojan",
-        "exploit": "chmod 777 /etc/shadow — make sensitive files world-readable",
-        "cves": [],
-        "remediation": "Remove cap_fowner. Use targeted file ACLs instead.",
+        "remediation": "Upgrade kernel >= 3.14.3. Apply distro patches.",
         "prevention_th": [
-            "ลบ cap_fowner และใช้ POSIX ACL แทนเพื่อให้สิทธิ์เฉพาะเจาะจง",
-            "Monitor การเปลี่ยนแปลง permission ของไฟล์ด้วย auditd",
-            "ใช้ Linux Security Module (LSM) เช่น AppArmor เพื่อกำหนด policy เพิ่มเติม",
+            "อัปเกรด kernel เป็นเวอร์ชัน 3.14.3 ขึ้นไป หรือ apply distro security patch",
+            "ลด SUID binary ที่ไม่จำเป็นออกจากระบบ: find / -perm -4000 -type f 2>/dev/null",
+            "ใช้ systemd sandboxing สำหรับ service ที่ใช้ tty: PrivateTmp=yes, NoNewPrivileges=yes",
         ],
+        "trigger": {
+            "needs_suid_binary": [],
+            "needs_writable_path": False,
+            "needs_env_var": [],
+            "needs_any_suid": True
+        }
     },
-    "cap_sys_rawio": {
-        "severity": "CRITICAL",
-        "base_score": 9.2,
-        "description": "Raw I/O access to block devices — can read/write raw disk including /dev/sda.",
-        "description_th": "เข้าถึง block device โดยตรง (raw I/O) สามารถอ่านหรือเขียนข้อมูลดิบบน disk ทั้งหมด รวมถึง /dev/sda โดยไม่ผ่าน filesystem",
-        "impact_th": "ผู้โจมตีสามารถดึงข้อมูลทุกอย่างจาก disk รวมถึงข้อมูลที่ถูก 'ลบ' ไปแล้ว, แก้ไข MBR/GPT เพื่อฝัง bootkit, หรือทำลายข้อมูลทั้ง disk",
-        "exploit": "dd if=/dev/sda | grep -a password — extract credentials from raw disk",
-        "cves": [],
-        "remediation": "Remove immediately. Never assign to user-accessible binaries.",
+    {
+        "cve": "CVE-2017-7308",
+        "name": "AF_PACKET via Writable PATH Escalation",
+        "category": "Network / PATH",
+        "description": "AF_PACKET socket combined with world-writable PATH directories allows crafting race conditions for privilege escalation.",
+        "description_th": "AF_PACKET socket เมื่อใช้ร่วมกับ world-writable PATH directory ทำให้สามารถสร้าง race condition เพื่อยกระดับสิทธิ์ได้",
+        "impact_th": "ผู้โจมตีที่มีสิทธิ์สร้าง AF_PACKET socket (หรือผ่าน cap_net_raw) ร่วมกับ PATH directory ที่เขียนได้ สามารถ trigger race condition ใน kernel network stack เพื่อได้ root",
+        "cvss": 7.8,
+        "severity": "HIGH",
+        "remediation": "Upgrade kernel >= 4.10.6. Restrict raw socket capabilities.",
         "prevention_th": [
-            "ลบ cap_sys_rawio ออกทันที ไม่มีเหตุผลใดที่ user-space binary ทั่วไปต้องการ capability นี้",
-            "จำกัดการเข้าถึง /dev/sda และ block device อื่นๆ ด้วย udev rules",
-            "เข้ารหัส disk ทั้งหมดด้วย LUKS เพื่อให้ข้อมูลดิบไม่มีประโยชน์แม้ถูกอ่าน",
-            "ตรวจสอบ raw disk access ผ่าน audit log: auditctl -w /dev/sda -p rw",
+            "อัปเกรด kernel เป็นเวอร์ชัน 4.10.6 ขึ้นไป",
+            "จำกัดการสร้าง AF_PACKET socket: sysctl -w net.core.bpf_jit_harden=2",
+            "ลบ world-writable directory ออกจาก PATH เพื่อตัด attack vector",
+            "จำกัด cap_net_raw ไม่ให้มอบให้ process ที่ไม่จำเป็น",
+            "ใช้ seccomp profile เพื่อ block socket(AF_PACKET) syscall สำหรับ process ทั่วไป",
         ],
+        "trigger": {
+            "needs_suid_binary": [],
+            "needs_writable_path": True,
+            "needs_env_var": []
+        }
     },
-    "cap_kill": {
-        "severity": "LOW",
-        "base_score": 3.5,
-        "description": "Allows sending signals to any process — can kill critical system daemons.",
-        "description_th": "อนุญาตให้ส่ง signal ไปยัง process ใดก็ได้ รวมถึง process ของ root สามารถ kill daemon สำคัญของระบบได้",
-        "impact_th": "ผู้โจมตีสามารถ kill process ระบบสำคัญ เช่น systemd, syslog, หรือ security daemon เพื่อทำให้ระบบ logging หยุดทำงานและซ่อน activity",
-        "exploit": "kill -9 1 (kill init/systemd) causing system crash",
-        "cves": [],
-        "remediation": "Restrict to specific process management tools only.",
-        "prevention_th": [
-            "จำกัด cap_kill เฉพาะ process management tool ที่จำเป็น",
-            "ใช้ systemd service protection: ProtectSystem=strict, ProtectHome=true",
-            "ตั้งค่า watchdog สำหรับ critical daemon เพื่อ restart อัตโนมัติ",
-        ],
+]
+
+# ==============================
+# Dangerous ENV var descriptions (Thai)
+# ==============================
+ENV_VAR_INFO = {
+    "LD_PRELOAD": {
+        "desc_th": "บังคับให้ dynamic linker โหลด shared library ที่กำหนดก่อน library อื่น อาจถูกใช้ override function ใน SUID binary",
+        "risk": "HIGH"
     },
-    "cap_sys_chroot": {
-        "severity": "MEDIUM",
-        "base_score": 6.0,
-        "description": "Allows chroot to arbitrary directories — combined with other caps can escape sandbox.",
-        "description_th": "อนุญาตให้ chroot ไปยัง directory ใดก็ได้ เมื่อใช้ร่วมกับ capability อื่น สามารถหลบหนีออกจาก chroot sandbox ได้",
-        "impact_th": "ผู้โจมตีที่ถูกกักไว้ใน chroot environment สามารถหลบหนีออกมายัง root filesystem ได้ หากมี cap_sys_chroot ร่วมกับ capability อื่น",
-        "exploit": "chroot escape combined with cap_sys_admin or writable filesystem",
-        "cves": ["CVE-2015-1318"],
-        "remediation": "Remove cap_sys_chroot or combine with seccomp/AppArmor restrictions.",
-        "prevention_th": [
-            "ใช้ container technology เช่น Docker หรือ systemd-nspawn แทน chroot เพราะมีการ isolate ที่ดีกว่า",
-            "เพิ่ม seccomp profile เพื่อจำกัด syscall สำหรับ process ที่อยู่ใน chroot",
-            "ตรวจสอบว่า chroot directory ไม่มี writable filesystem ที่ผู้โจมตีสามารถนำไปใช้ได้",
-        ],
+    "LD_AUDIT": {
+        "desc_th": "กำหนด audit library สำหรับ dynamic linker สามารถใช้ inject code ในลักษณะเดียวกับ LD_PRELOAD",
+        "risk": "HIGH"
     },
-    "cap_audit_write": {
-        "severity": "LOW",
-        "base_score": 3.0,
-        "description": "Allows writing to kernel audit log — can be used to obscure attack traces.",
-        "description_th": "อนุญาตให้เขียนข้อมูลลงใน kernel audit log สามารถใช้เพื่อฝัง log ปลอมหรือสร้างความสับสนในระหว่างการโจมตี",
-        "impact_th": "ผู้โจมตีสามารถ inject audit entry ปลอมเพื่อปิดบัง activity ที่เป็นอันตราย ทำให้การ forensics และ incident response ทำได้ยากขึ้น",
-        "exploit": "Inject false audit entries to cover tracks during an attack",
-        "cves": [],
-        "remediation": "Only assign to audit daemons. Monitor audit log integrity.",
-        "prevention_th": [
-            "จำกัด cap_audit_write เฉพาะ auditd daemon เท่านั้น",
-            "ส่ง audit log ไปยัง remote server (log aggregator) แบบ real-time เพื่อป้องกันการแก้ไข",
-            "ใช้ log integrity verification เช่น signing audit logs",
-            "Monitor ความผิดปกติใน audit log ด้วย SIEM tool",
-        ],
+    "LD_LIBRARY_PATH": {
+        "desc_th": "เพิ่ม directory ค้นหา shared library สามารถใช้โหลด library ปลอมแทนของจริงได้",
+        "risk": "HIGH"
+    },
+    "SUDO_EDITOR": {
+        "desc_th": "กำหนด editor ที่ sudoedit ใช้งาน หากถูก set เป็น script อันตราย จะถูกรันด้วย root privilege",
+        "risk": "MEDIUM"
+    },
+    "VISUAL": {
+        "desc_th": "กำหนด visual editor ที่ใช้งาน sudo อาจ inherit ค่านี้ไปได้หาก env_reset ไม่ถูก set",
+        "risk": "MEDIUM"
+    },
+    "EDITOR": {
+        "desc_th": "กำหนด default text editor อาจถูก sudo หรือ program อื่นใช้งาน",
+        "risk": "MEDIUM"
+    },
+    "PYTHONPATH": {
+        "desc_th": "เพิ่ม directory ค้นหา Python module หาก Python binary มี SUID หรือ capability ผู้โจมตีโหลด module ปลอมได้",
+        "risk": "MEDIUM"
+    },
+    "PERL5LIB": {
+        "desc_th": "เพิ่ม directory ค้นหา Perl module คล้ายกับ PYTHONPATH สามารถใช้ inject malicious Perl module",
+        "risk": "MEDIUM"
+    },
+    "RUBYLIB": {
+        "desc_th": "เพิ่ม directory ค้นหา Ruby library สามารถ override standard library ด้วย code ที่เป็นอันตราย",
+        "risk": "MEDIUM"
+    },
+    "JAVA_TOOL_OPTIONS": {
+        "desc_th": "กำหนด JVM options ที่ใช้กับทุก Java process บนระบบ อาจถูกใช้ inject Java agent ที่เป็นอันตราย",
+        "risk": "MEDIUM"
+    },
+    "NODE_OPTIONS": {
+        "desc_th": "กำหนด Node.js runtime options สามารถใช้โหลด malicious module หรือ disable security feature ของ Node",
+        "risk": "MEDIUM"
+    },
+    "DYLD_INSERT_LIBRARIES": {
+        "desc_th": "macOS equivalent ของ LD_PRELOAD บังคับโหลด dynamic library ก่อน library อื่น",
+        "risk": "HIGH"
     },
 }
 
@@ -317,9 +398,19 @@ def get_distro():
         except:
             return "Unknown"
 
-def get_file_owner(path):
+def get_current_user():
     try:
-        return pwd.getpwuid(os.stat(path).st_uid).pw_name
+        return pwd.getpwuid(os.getuid()).pw_name
+    except:
+        return "unknown"
+
+# ==============================
+# PATH Analysis
+# ==============================
+def get_path_owner(path):
+    try:
+        uid = os.stat(path).st_uid
+        return pwd.getpwuid(uid).pw_name
     except:
         return "unknown"
 
@@ -329,160 +420,162 @@ def is_world_writable(path):
     except:
         return False
 
-def is_setuid(path):
-    try:
-        return bool(os.stat(path).st_mode & stat.S_ISUID)
-    except:
-        return False
+def is_relative_path(path):
+    return not os.path.isabs(path)
 
-def is_setgid(path):
-    try:
-        return bool(os.stat(path).st_mode & stat.S_ISGID)
-    except:
-        return False
+def path_exists(path):
+    return os.path.isdir(path)
 
-def get_file_type(path):
-    try:
-        mode = os.stat(path).st_mode
-        if stat.S_ISREG(mode):  return "binary"
-        if stat.S_ISDIR(mode):  return "directory"
-        if stat.S_ISLNK(mode):  return "symlink"
-    except:
-        pass
-    return "unknown"
+def scan_path():
+    path_env  = os.environ.get("PATH", "")
+    path_dirs = [p for p in path_env.split(":") if p]
+    findings  = []
 
-# ==============================
-# Get Capabilities
-# ==============================
-def get_capabilities():
-    try:
-        result = subprocess.run(
-            ["getcap", "-r", "/"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True, timeout=60
-        )
-        lines = [l for l in result.stdout.strip().split("\n") if l.strip()]
-        return lines
-    except FileNotFoundError:
-        print(c(Color.YELLOW, "  ⚠  'getcap' not found. Install: apt install libcap2-bin"))
-        return []
-    except Exception as e:
-        print(c(Color.RED, f"  ✖  getcap error: {e}"))
-        return []
+    for idx, directory in enumerate(path_dirs):
+        entry = {
+            "directory":      directory,
+            "order":          idx + 1,
+            "exists":         path_exists(directory),
+            "relative":       is_relative_path(directory),
+            "world_writable": False,
+            "owner":          "N/A",
+            "risk":           "OK",
+            "issues":         []
+        }
 
-# ==============================
-# Parse & Analyze Capabilities
-# ==============================
-def parse_cap_line(line):
-    """Parse: /usr/bin/python3 = cap_setuid+ep"""
-    if "=" not in line:
-        return None, None, None
-    parts = line.split("=", 1)
-    path = parts[0].strip()
-    cap_str = parts[1].strip().lower()
+        if entry["relative"]:
+            entry["issues"].append("Relative path — hijackable")
+            entry["risk"] = "HIGH"
 
-    cap_types = []
-    if "+e" in cap_str or "=ep" in cap_str or "eip" in cap_str:
-        cap_types.append("effective")
-    if "+p" in cap_str or "=p" in cap_str:
-        cap_types.append("permitted")
-    if "+i" in cap_str or "=i" in cap_str:
-        cap_types.append("inheritable")
+        if entry["exists"]:
+            entry["world_writable"] = is_world_writable(directory)
+            entry["owner"]          = get_path_owner(directory)
 
-    return path, cap_str, cap_types if cap_types else ["permitted"]
+            if entry["world_writable"]:
+                entry["issues"].append("World-writable")
+                entry["risk"] = "HIGH"
 
-def analyze_capabilities(lines):
-    findings = []
-    seen = set()
+            if entry["world_writable"] and idx < 3:
+                entry["issues"].append("Appears early in PATH (position #%d)" % (idx + 1))
+        else:
+            entry["issues"].append("Directory does not exist — phantom PATH entry")
+            entry["risk"] = "MEDIUM"
 
-    for line in lines:
-        path, cap_str, cap_types = parse_cap_line(line)
-        if not path:
-            continue
+        findings.append(entry)
 
-        for cap_name, cap_info in CAP_DB.items():
-            if cap_name not in cap_str:
-                continue
-
-            key = f"{path}:{cap_name}"
-            if key in seen:
-                continue
-            seen.add(key)
-
-            writable  = is_world_writable(path)
-            suid      = is_setuid(path)
-            owner     = get_file_owner(path)
-            ftype     = get_file_type(path)
-
-            score = cap_info["base_score"]
-            risk_factors = []
-
-            if writable:
-                score += 0.5
-                risk_factors.append("world-writable (+0.5)")
-            if suid:
-                score += 0.3
-                risk_factors.append("SUID bit set (+0.3)")
-            if owner != "root":
-                score += 0.2
-                risk_factors.append(f"owned by non-root: {owner} (+0.2)")
-            if "effective" in cap_types:
-                risk_factors.append("effective capability (immediately usable)")
-
-            score = min(round(score, 1), 10.0)
-
-            binary_name = os.path.basename(path).lower()
-            is_interpreter = any(x in binary_name for x in [
-                "python", "perl", "ruby", "node", "php",
-                "bash", "sh", "dash", "lua", "tcl",
-            ])
-            if is_interpreter:
-                risk_factors.append(f"scripting interpreter — trivial exploitation")
-                score = min(score + 0.5, 10.0)
-
-            findings.append({
-                "binary":           path,
-                "binary_name":      binary_name,
-                "capability":       cap_name,
-                "cap_type":         ", ".join(cap_types),
-                "severity":         cap_info["severity"],
-                "risk_score":       score,
-                "owner":            owner,
-                "world_writable":   writable,
-                "suid":             suid,
-                "file_type":        ftype,
-                "is_interpreter":   is_interpreter,
-                "risk_factors":     risk_factors,
-                "description":      cap_info["description"],
-                "description_th":   cap_info.get("description_th", ""),
-                "impact_th":        cap_info.get("impact_th", ""),
-                "exploit_hint":     cap_info["exploit"],
-                "cves":             cap_info["cves"],
-                "remediation":      cap_info["remediation"],
-                "prevention_th":    cap_info.get("prevention_th", []),
-            })
-
-    findings.sort(key=lambda x: x["risk_score"], reverse=True)
     return findings
 
 # ==============================
-# Simulate Lab Environment
+# Environment Variable Scan
 # ==============================
-def setup_lab():
-    """Create fake getcap output for testing"""
-    print(c(Color.CYAN, "\n  [*] Using Lab Simulation mode\n"))
-    fake_lines = [
-        "/usr/bin/python3.11 = cap_setuid+ep",
-        "/usr/bin/perl = cap_dac_override+ep",
-        "/usr/bin/tcpdump = cap_net_raw+ep",
-        "/usr/bin/ping = cap_net_raw+p",
-        "/usr/sbin/dumpcap = cap_net_admin,cap_net_raw+ep",
-        "/usr/bin/vim.basic = cap_dac_read_search+ep",
-        "/usr/local/bin/custom_tool = cap_sys_admin+ep",
-        "/usr/bin/node = cap_setuid,cap_setgid+ep",
-    ]
-    return fake_lines
+DANGEROUS_ENV_VARS = [
+    "LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH",
+    "SUDO_EDITOR", "VISUAL", "EDITOR",
+    "PYTHONPATH", "PERL5LIB", "RUBYLIB",
+    "JAVA_TOOL_OPTIONS", "NODE_OPTIONS",
+    "DYLD_INSERT_LIBRARIES",
+]
+
+def scan_env_vars():
+    findings = []
+    for var in DANGEROUS_ENV_VARS:
+        val = os.environ.get(var)
+        if val:
+            info = ENV_VAR_INFO.get(var, {})
+            findings.append({
+                "variable": var,
+                "value":    val[:80] + ("..." if len(val) > 80 else ""),
+                "risk":     info.get("risk", "MEDIUM"),
+                "desc_th":  info.get("desc_th", ""),
+            })
+    return findings
+
+# ==============================
+# SUID Binary Scan
+# ==============================
+KNOWN_SUID_DANGEROUS = [
+    "nmap", "vim", "less", "more", "nano", "awk", "gawk",
+    "find", "cp", "mv", "chmod", "chown", "python", "python3",
+    "perl", "ruby", "bash", "sh", "dash", "env", "tee",
+    "wget", "curl", "tar", "zip", "strace", "gdb",
+    "pkexec", "sudo", "su", "newgrp", "passwd",
+    "docker", "lxc", "runc",
+]
+
+def scan_suid_binaries():
+    results = []
+    try:
+        proc = subprocess.run(
+            ["find", "/", "-perm", "-4000", "-type", "f"],
+            capture_output=True, text=True,
+            stderr=subprocess.DEVNULL, timeout=30
+        )
+        for line in proc.stdout.strip().split("\n"):
+            if not line:
+                continue
+            binary_name = os.path.basename(line).lower()
+            binary_base = binary_name.rstrip("0123456789.-")
+
+            dangerous = any(
+                binary_name.startswith(d) or binary_base == d
+                for d in KNOWN_SUID_DANGEROUS
+            )
+
+            results.append({
+                "path":      line.strip(),
+                "binary":    binary_name,
+                "dangerous": dangerous,
+            })
+    except Exception:
+        pass
+
+    results.sort(key=lambda x: (0 if x["dangerous"] else 1, x["binary"]))
+    return results
+
+# ==============================
+# CVE Correlation
+# ==============================
+def correlate_cve(path_findings, env_findings, suid_findings):
+    has_writable_path = any(f["world_writable"] for f in path_findings)
+    has_relative_path = any(f["relative"] for f in path_findings)
+    env_vars_present  = {f["variable"] for f in env_findings}
+    suid_binaries     = {os.path.basename(s["path"]).lower() for s in suid_findings}
+    has_any_suid      = len(suid_findings) > 0
+
+    hits = []
+    for cve in CVE_DB:
+        t = cve["trigger"]
+        matched_reasons = []
+
+        if t.get("needs_suid_binary"):
+            found_suid = [b for b in t["needs_suid_binary"]
+                          if any(s.startswith(b) for s in suid_binaries)]
+            if not found_suid:
+                continue
+            matched_reasons.append(f"SUID binary found: {', '.join(found_suid)}")
+
+        if t.get("needs_any_suid") and not has_any_suid:
+            continue
+        elif t.get("needs_any_suid"):
+            matched_reasons.append(f"{len(suid_findings)} SUID binaries present")
+
+        if t.get("needs_writable_path"):
+            if not (has_writable_path or has_relative_path):
+                continue
+            if has_writable_path:
+                matched_reasons.append("World-writable PATH directory detected")
+            if has_relative_path:
+                matched_reasons.append("Relative PATH entry detected")
+
+        if t.get("needs_env_var"):
+            found_env = [v for v in t["needs_env_var"] if v in env_vars_present]
+            if not found_env:
+                continue
+            matched_reasons.append(f"Dangerous env var set: {', '.join(found_env)}")
+
+        hits.append({**cve, "matched_reasons": matched_reasons})
+
+    return sorted(hits, key=lambda x: x["cvss"], reverse=True)
 
 # ==============================
 # Pretty Output
@@ -496,89 +589,113 @@ def print_banner():
 ██║     ██║   ██║╚════██║╚██╗ ██╔╝██║██║╚██╗██║   ██║   ██╔══╝
 ╚██████╗╚██████╔╝███████║ ╚████╔╝ ██║██║ ╚████║   ██║   ███████╗
  ╚═════╝ ╚═════╝ ╚══════╝  ╚═══╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝''')}
-{c(Color.GRAY, '         Linux Capability Scanner  |  "Conquer Vulnerabilities"')}
+{c(Color.GRAY, '         PATH Hijack Scanner  |  "Conquer Vulnerabilities"')}
 """)
 
-def print_sysinfo(mode_label):
+def print_sysinfo():
     print(c(Color.CYAN + Color.BOLD, "  ╔══ SYSTEM INFORMATION ════════════════════════════════════╗"))
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Hostname  :')} {c(Color.WHITE,  platform.node())}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Distro    :')} {c(Color.WHITE,  get_distro())}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Arch      :')} {c(Color.WHITE,  platform.machine())}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Mode      :')} {c(Color.YELLOW, mode_label)}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Caps in DB:')} {c(Color.WHITE,  str(len(CAP_DB)))}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Timestamp :')} {c(Color.WHITE,  datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Hostname  :')} {c(Color.WHITE, platform.node())}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Distro    :')} {c(Color.WHITE, get_distro())}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Arch      :')} {c(Color.WHITE, platform.machine())}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'User      :')} {c(Color.YELLOW, get_current_user())} {c(Color.GRAY, '(UID: ' + str(os.getuid()) + ')')}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Timestamp :')} {c(Color.WHITE, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}")
     print(c(Color.CYAN + Color.BOLD, "  ╚═══════════════════════════════════════════════════════════╝\n"))
 
-def print_findings(findings):
+def print_path_analysis(findings):
+    print(c(Color.CYAN + Color.BOLD, f"\n  ── PATH ANALYSIS ({len(findings)} entries) ──\n"))
+
+    for f in findings:
+        order_str = c(Color.GRAY, f"[#{f['order']:02d}]")
+
+        if not f["exists"]:
+            icon  = c(Color.GRAY, "✗")
+            color = Color.GRAY
+        elif f["world_writable"] or f["relative"]:
+            icon  = c(Color.RED + Color.BOLD, "!")
+            color = Color.RED
+        else:
+            icon  = c(Color.GREEN, "✔")
+            color = Color.WHITE
+
+        print(f"  {icon} {order_str} {c(color + Color.BOLD, f['directory'])}")
+
+        if f["exists"]:
+            print(f"      {c(Color.GRAY,'owner:')} {c(Color.CYAN, f['owner'])}  "
+                  f"{c(Color.GRAY,'writable:')} {c(Color.RED + Color.BOLD, 'YES') if f['world_writable'] else c(Color.GREEN,'no')}  "
+                  f"{c(Color.GRAY,'relative:')} {c(Color.RED + Color.BOLD, 'YES') if f['relative'] else c(Color.GREEN,'no')}")
+
+        if f["issues"]:
+            for issue in f["issues"]:
+                print(f"      {c(Color.ORANGE, '⚠')} {c(Color.YELLOW, issue)}")
+
+def print_env_analysis(findings):
     if not findings:
-        print(c(Color.GREEN + Color.BOLD, "\n  ✔  No dangerous capabilities found on this system.\n"))
+        print(c(Color.GREEN + Color.BOLD, "\n  ✔  No dangerous environment variables detected.\n"))
         return
 
-    groups = {"CRITICAL": [], "HIGH": [], "MEDIUM": [], "LOW": []}
+    print(c(Color.RED + Color.BOLD, f"\n  ── DANGEROUS ENV VARS ({len(findings)}) ──\n"))
     for f in findings:
-        groups.get(f["severity"], groups["LOW"]).append(f)
+        risk_c = Color.RED if f["risk"] == "HIGH" else Color.YELLOW
+        print(f"  {c(risk_c + Color.BOLD, '!')}  {c(Color.WHITE + Color.BOLD, f['variable'])} {severity_badge(f['risk'])}")
+        print(f"     {c(Color.GRAY,'value   :')} {c(Color.YELLOW, f['value'])}")
+        # Thai description
+        if f.get("desc_th"):
+            print(f"     {c(Color.CYAN,'📋 อธิบาย :')} {c(Color.WHITE, f['desc_th'][:90])}{'...' if len(f['desc_th'])>90 else ''}")
 
-    for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]:
-        group = groups[sev]
-        if not group:
-            continue
+def print_suid_analysis(findings):
+    dangerous = [f for f in findings if f["dangerous"]]
+    safe      = [f for f in findings if not f["dangerous"]]
 
-        sev_color = {
-            "CRITICAL": Color.BG_RED + Color.BOLD,
-            "HIGH":     Color.RED + Color.BOLD,
-            "MEDIUM":   Color.YELLOW + Color.BOLD,
-            "LOW":      Color.GREEN,
-        }.get(sev, Color.GRAY)
+    print(c(Color.CYAN + Color.BOLD, f"\n  ── SUID BINARIES ({len(findings)} total) ──\n"))
 
-        print(f"\n{sev_color}  ── {sev} ({len(group)}) ──{Color.RESET}")
+    if dangerous:
+        print(c(Color.RED, f"  {Color.BOLD}⚠ High-risk SUID binaries ({len(dangerous)}):{Color.RESET}"))
+        for f in dangerous[:15]:
+            print(f"    {c(Color.RED + Color.BOLD,'▸')}  {c(Color.WHITE, f['path'])}")
 
-        for f in group:
-            interp_icon = c(Color.RED + Color.BOLD, " 🐍INTERPRETER") if f["is_interpreter"] else ""
-            ww_icon     = c(Color.ORANGE, " ✎WRITABLE") if f["world_writable"] else ""
-            suid_icon   = c(Color.YELLOW, " ⚑SUID") if f["suid"] else ""
+    if safe:
+        print(c(Color.GRAY, f"\n  Standard SUID binaries ({len(safe)}):"))
+        for f in safe[:10]:
+            print(f"    {c(Color.GRAY,'·')}  {c(Color.GRAY, f['path'])}")
+        if len(safe) > 10:
+            print(c(Color.GRAY, f"    ... and {len(safe)-10} more"))
 
-            print(f"\n  {c(Color.RED + Color.BOLD, '✖')}  {c(Color.WHITE + Color.BOLD, f['binary'])}{interp_icon}{ww_icon}{suid_icon}")
-            print(f"     {c(Color.GRAY,'Capability  :')} {c(Color.MAGENTA + Color.BOLD, f['capability'])}  "
-                  f"{c(Color.GRAY,'type:')} {c(Color.CYAN, f['cap_type'])}")
-            print(f"     {c(Color.GRAY,'Risk Score  :')} {cvss_bar(f['risk_score'])}")
-            print(f"     {c(Color.GRAY,'Owner       :')} {c(Color.CYAN, f['owner'])}  "
-                  f"{c(Color.GRAY,'file:')} {c(Color.CYAN, f['file_type'])}")
+def print_cve(cve_findings):
+    if not cve_findings:
+        print(c(Color.GREEN + Color.BOLD, "\n  ✔  No CVE correlations triggered.\n"))
+        return
 
-            # English description (truncated)
-            print(f"     {c(Color.GRAY,'Description :')} {f['description'][:80]}{'...' if len(f['description'])>80 else ''}")
+    print(c(Color.RED + Color.BOLD, f"\n  ── CVE CORRELATIONS ({len(cve_findings)}) ──"))
 
-            # ── Thai vulnerability explanation ──
-            if f.get("description_th"):
-                print(f"     {c(Color.CYAN,'📋 ช่องโหว่   :')} {c(Color.WHITE, f['description_th'][:90])}{'...' if len(f['description_th'])>90 else ''}")
-            if f.get("impact_th"):
-                print(f"     {c(Color.ORANGE,'⚡ ผลกระทบ   :')} {c(Color.YELLOW, f['impact_th'][:90])}{'...' if len(f['impact_th'])>90 else ''}")
+    for entry in cve_findings:
+        print(f"\n  {c(Color.RED + Color.BOLD, '✖')}  {c(Color.BOLD + Color.WHITE, entry['cve'])}  "
+              f"{c(Color.MAGENTA, entry['name'])}  {severity_badge(entry['severity'])}")
+        print(f"     {c(Color.GRAY,'Category    :')} {c(Color.CYAN, entry['category'])}")
+        print(f"     {c(Color.GRAY,'CVSS Score  :')} {cvss_bar(entry['cvss'])}")
+        # English description (short)
+        print(f"     {c(Color.GRAY,'Description :')} {entry['description'][:85]}{'...' if len(entry['description'])>85 else ''}")
+        # Thai vulnerability explanation
+        if entry.get("description_th"):
+            print(f"     {c(Color.CYAN,'📋 ช่องโหว่  :')} {c(Color.WHITE, entry['description_th'][:90])}{'...' if len(entry['description_th'])>90 else ''}")
+        if entry.get("impact_th"):
+            print(f"     {c(Color.ORANGE,'⚡ ผลกระทบ  :')} {c(Color.YELLOW, entry['impact_th'][:90])}{'...' if len(entry['impact_th'])>90 else ''}")
+        print(f"     {c(Color.GRAY,'Triggered by:')}")
+        for reason in entry["matched_reasons"]:
+            print(f"       {c(Color.ORANGE,'→')} {c(Color.YELLOW, reason)}")
+        # Thai prevention tips
+        if entry.get("prevention_th"):
+            print(f"     {c(Color.GREEN + Color.BOLD,'🛡  การป้องกัน:')}")
+            for i, tip in enumerate(entry["prevention_th"], 1):
+                print(f"       {c(Color.GREEN, f'  {i}.')} {c(Color.GRAY, tip[:85])}{'...' if len(tip)>85 else ''}")
+        else:
+            print(f"     {c(Color.GREEN,'✦  Fix      :')} {c(Color.GRAY, entry['remediation'])}")
 
-            if f["risk_factors"]:
-                print(f"     {c(Color.ORANGE,'⚠  Factors   :')} {c(Color.YELLOW, ' | '.join(f['risk_factors'][:3]))}")
-
-            if f["exploit_hint"]:
-                print(f"     {c(Color.RED,'💀 Exploit   :')} {c(Color.GRAY, f['exploit_hint'][:75])}")
-
-            if f["cves"]:
-                cve_str = "  ".join(c(Color.CYAN, cv) for cv in f["cves"][:3])
-                print(f"     {c(Color.GRAY,'CVEs        :')} {cve_str}")
-
-            # ── Prevention tips in Thai ──
-            if f.get("prevention_th"):
-                print(f"     {c(Color.GREEN + Color.BOLD,'🛡  การป้องกัน:')}")
-                for i, tip in enumerate(f["prevention_th"], 1):
-                    print(f"       {c(Color.GREEN, f'  {i}.')} {c(Color.GRAY, tip[:85])}{'...' if len(tip)>85 else ''}")
-            else:
-                print(f"     {c(Color.GREEN,'✦  Fix       :')} {c(Color.GRAY, f['remediation'][:80])}")
-
-def print_summary(findings):
-    critical = sum(1 for f in findings if f["severity"] == "CRITICAL")
-    high     = sum(1 for f in findings if f["severity"] == "HIGH")
-    medium   = sum(1 for f in findings if f["severity"] == "MEDIUM")
-    low      = sum(1 for f in findings if f["severity"] == "LOW")
-    interps  = sum(1 for f in findings if f["is_interpreter"])
-    ww       = sum(1 for f in findings if f["world_writable"])
-    max_score = max((f["risk_score"] for f in findings), default=0)
+def print_summary(path_f, env_f, suid_f, cve_f):
+    writable_count = sum(1 for f in path_f if f["world_writable"])
+    relative_count = sum(1 for f in path_f if f["relative"])
+    phantom_count  = sum(1 for f in path_f if not f["exists"])
+    dangerous_suid = sum(1 for f in suid_f if f["dangerous"])
+    max_cvss       = max((c_["cvss"] for c_ in cve_f), default=0)
 
     def sev(score):
         if score >= 9: return "CRITICAL"
@@ -588,21 +705,22 @@ def print_summary(findings):
         return "NONE"
 
     print(f"\n{c(Color.CYAN + Color.BOLD, '  ╔══ SCAN SUMMARY ════════════════════════════════════════════╗')}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Total Binaries with Caps :')} {c(Color.WHITE + Color.BOLD, str(len(findings)))}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.BG_RED + Color.BOLD,'  CRITICAL               :')} {c(Color.RED + Color.BOLD, str(critical))}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.RED,   '  HIGH                   :')} {c(Color.RED + Color.BOLD, str(high))}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.YELLOW,'  MEDIUM                 :')} {c(Color.YELLOW + Color.BOLD, str(medium))}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GREEN, '  LOW                    :')} {c(Color.GREEN + Color.BOLD, str(low))}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Scripting Interpreters   :')} {c(Color.RED + Color.BOLD if interps else Color.GREEN, str(interps))}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'World-Writable Binaries  :')} {c(Color.RED + Color.BOLD if ww else Color.GREEN, str(ww))}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Overall Risk Score       :')} {severity_badge(sev(max_score))}  {c(Color.GRAY,'Score')} {c(Color.BOLD, f'{max_score:.1f}')}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'PATH Entries       :')} {c(Color.WHITE, str(len(path_f)))}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.RED,  '  World-Writable   :')} {c(Color.RED + Color.BOLD, str(writable_count))}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.RED,  '  Relative PATH    :')} {c(Color.RED + Color.BOLD, str(relative_count))}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.YELLOW,'  Phantom (missing):')} {c(Color.YELLOW + Color.BOLD, str(phantom_count))}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Dangerous Env Vars :')} {c(Color.YELLOW + Color.BOLD, str(len(env_f)))}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'SUID Binaries      :')} {c(Color.WHITE, str(len(suid_f)))}  "
+          f"{c(Color.RED,'(dangerous: ' + str(dangerous_suid) + ')')}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'CVE Correlations   :')} {c(Color.RED + Color.BOLD, str(len(cve_f)))}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Overall Risk Score :')} {severity_badge(sev(max_cvss))}  {c(Color.GRAY,'CVSS')} {c(Color.BOLD, f'{max_cvss:.1f}')}")
     print(c(Color.CYAN + Color.BOLD, '  ╚═══════════════════════════════════════════════════════════╝\n'))
 
 # ==============================
 # Save Report
 # ==============================
-def save_report(findings):
-    max_score = max((f["risk_score"] for f in findings), default=0)
+def save_report(path_f, env_f, suid_f, cve_f):
+    max_cvss = max((c_["cvss"] for c_ in cve_f), default=0)
 
     def sev(score):
         if score >= 9: return "CRITICAL"
@@ -611,30 +729,39 @@ def save_report(findings):
         return "NONE"
 
     report = {
-        "tool":      "COSVINTE — Linux Capability Scanner",
+        "tool": "COSVINTE — PATH Hijack Scanner",
         "timestamp": datetime.now().isoformat(),
         "system": {
             "hostname": platform.node(),
             "distro":   get_distro(),
             "arch":     platform.machine(),
+            "user":     get_current_user(),
+            "uid":      os.getuid(),
         },
         "summary": {
-            "total_findings":   len(findings),
-            "critical":         sum(1 for f in findings if f["severity"] == "CRITICAL"),
-            "high":             sum(1 for f in findings if f["severity"] == "HIGH"),
-            "medium":           sum(1 for f in findings if f["severity"] == "MEDIUM"),
-            "low":              sum(1 for f in findings if f["severity"] == "LOW"),
-            "interpreters":     sum(1 for f in findings if f["is_interpreter"]),
-            "world_writable":   sum(1 for f in findings if f["world_writable"]),
-            "overall_score":    max_score,
-            "overall_severity": sev(max_score),
+            "path_entries":         len(path_f),
+            "writable_path_dirs":   sum(1 for f in path_f if f["world_writable"]),
+            "relative_path_dirs":   sum(1 for f in path_f if f["relative"]),
+            "phantom_path_dirs":    sum(1 for f in path_f if not f["exists"]),
+            "dangerous_env_vars":   len(env_f),
+            "suid_binaries":        len(suid_f),
+            "dangerous_suid":       sum(1 for f in suid_f if f["dangerous"]),
+            "cve_correlations":     len(cve_f),
+            "overall_cvss":         max_cvss,
+            "overall_severity":     sev(max_cvss),
         },
-        "findings": findings,
+        "path_analysis":    path_f,
+        "env_var_findings": env_f,
+        "suid_binaries":    suid_f,
+        "cve_correlations": [
+            {k: v for k, v in e.items() if k != "trigger"}
+            for e in cve_f
+        ],
     }
 
-    fname = f"cosvinte_caps_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    with open(fname, "w", encoding="utf-8") as fh:
-        json.dump(report, fh, indent=4, ensure_ascii=False)
+    fname = f"cosvinte_path_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    with open(fname, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=4, ensure_ascii=False)
     return fname
 
 # ==============================
@@ -642,32 +769,31 @@ def save_report(findings):
 # ==============================
 def main():
     print_banner()
+    print_sysinfo()
 
-    print(c(Color.CYAN + Color.BOLD, "  Select Mode:"))
-    print(f"  {c(Color.WHITE,'1')} {c(Color.GRAY,'─')} Real Scan (getcap -r /)")
-    print(f"  {c(Color.WHITE,'2')} {c(Color.GRAY,'─')} Lab Simulation (safe demo)\n")
+    print(c(Color.CYAN, "  [*] Analyzing PATH variable..."), end="", flush=True)
+    path_f = scan_path()
+    print(c(Color.GREEN, f" {len(path_f)} entries\n"))
 
-    mode = input(c(Color.CYAN, "  Enter choice [1/2]: ")).strip()
+    print(c(Color.CYAN, "  [*] Scanning environment variables..."), end="", flush=True)
+    env_f = scan_env_vars()
+    print(c(Color.GREEN, f" {len(env_f)} suspicious\n"))
 
-    if mode == "2":
-        lines      = setup_lab()
-        mode_label = "Lab Simulation"
-    else:
-        mode_label = "Real Scan"
-        print(c(Color.CYAN, "\n  [*] Running getcap -r / (may take a moment)..."), end="", flush=True)
-        lines = get_capabilities()
-        print(c(Color.GREEN, f" {len(lines)} entries found\n"))
+    print(c(Color.CYAN, "  [*] Scanning SUID binaries (this may take a moment)..."), end="", flush=True)
+    suid_f = scan_suid_binaries()
+    print(c(Color.GREEN, f" {len(suid_f)} found\n"))
 
-    print_sysinfo(mode_label)
+    print(c(Color.CYAN, "  [*] Correlating CVEs..."), end="", flush=True)
+    cve_f = correlate_cve(path_f, env_f, suid_f)
+    print(c(Color.GREEN, f" {len(cve_f)} matched\n"))
 
-    print(c(Color.CYAN, "  [*] Analyzing capabilities..."), end="", flush=True)
-    findings = analyze_capabilities(lines)
-    print(c(Color.GREEN, f" {len(findings)} findings\n"))
+    print_path_analysis(path_f)
+    print_env_analysis(env_f)
+    print_suid_analysis(suid_f)
+    print_cve(cve_f)
+    print_summary(path_f, env_f, suid_f, cve_f)
 
-    print_findings(findings)
-    print_summary(findings)
-
-    fname = save_report(findings)
+    fname = save_report(path_f, env_f, suid_f, cve_f)
     print(c(Color.GRAY, f"  Report saved → {c(Color.WHITE + Color.BOLD, fname)}\n"))
 
 if __name__ == "__main__":
