@@ -303,13 +303,30 @@ CVE_DB = [
 # Version Matching
 # ==============================
 def match_version(current, rule):
+    import re as _re
+    # <999.0 is used as "always vulnerable" sentinel
+    if rule in ("<999.0", "<=999.0"):
+        return True
     try:
+        if rule.startswith("<="):
+            return version.parse(current) < version.parse(rule[2:]) or                    version.parse(current) == version.parse(rule[2:])
         if rule.startswith("<"):
             return version.parse(current) < version.parse(rule[1:])
-        if rule.startswith("<="):
-            return version.parse(current) <= version.parse(rule[2:])
-    except:
+    except Exception:
         pass
+    # Fallback: numeric prefix comparison (handles "3.0pl1", "1.5.3-1+b1" etc.)
+    def nums(s):
+        return [int(x) for x in _re.findall(r"\d+", s)]
+    cur = nums(current)
+    thr_str = rule.lstrip("<=>")
+    thr = nums(thr_str)
+    length = max(len(cur), len(thr))
+    cur += [0] * (length - len(cur))
+    thr += [0] * (length - len(thr))
+    if rule.startswith("<="):
+        return cur <= thr
+    if rule.startswith("<"):
+        return cur < thr
     return False
 
 # ==============================
