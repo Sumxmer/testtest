@@ -7,738 +7,517 @@
 ╚██████╗╚██████╔╝███████║ ╚████╔╝ ██║██║ ╚████║   ██║   ███████╗
  ╚═════╝ ╚═════╝ ╚══════╝  ╚═══╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝
 
-  COSVINTE — Cron CVE Scanner  |  "Conquer Vulnerabilities"
+  COSVINTE — Kernel CVE Scanner  |  "Conquer Vulnerabilities"
 """
 
-import os
-import json
-import stat
-import shutil
-import subprocess
 import platform
-import pwd
+import subprocess
+import json
+import re
+import sys
 from datetime import datetime
 from packaging import version
 
 # ==============================
-# ANSI Colors
+# ANSI Color Codes
 # ==============================
 class Color:
     RESET   = "\033[0m"
     BOLD    = "\033[1m"
     RED     = "\033[91m"
+    ORANGE  = "\033[38;5;208m"
     YELLOW  = "\033[93m"
     GREEN   = "\033[92m"
     CYAN    = "\033[96m"
+    BLUE    = "\033[94m"
     MAGENTA = "\033[95m"
     WHITE   = "\033[97m"
     GRAY    = "\033[90m"
-    ORANGE  = "\033[38;5;208m"
     BG_RED  = "\033[41m"
+    BG_DARK = "\033[40m"
 
 def c(color, text):
+    """Wrap text with color and reset"""
     return f"{color}{text}{Color.RESET}"
 
-def severity_badge(sev):
-    colors = {
-        "CRITICAL": Color.BG_RED + Color.BOLD,
-        "HIGH":     Color.RED + Color.BOLD,
-        "MEDIUM":   Color.YELLOW,
-        "LOW":      Color.GREEN,
-    }
-    return f"{colors.get(sev, Color.GRAY)} {sev} {Color.RESET}"
+# ==============================
+# CVE Database (Extended)
+# ==============================
+CVE_DB = [
+    # ── Dirty COW family ──
+    {
+        "cve": "CVE-2016-5195",
+        "name": "Dirty COW",
+        "category": "Race Condition",
+        "affected_min": "2.6.22",
+        "affected_max": "4.8.3",
+        "cvss": 7.8,
+        "severity": "HIGH",
+        "description": "Race condition in mm/gup.c allows local privilege escalation via write access to read-only mappings.",
+        "fix_commit": "19be0eaffa3ac7d8eb6784ad9bdbc7d67ed8e619",
+        "patch_indicator": ["mm/gup.c", "cow_user_page"],
+        "thai_detail": (
+            "ช่องโหว่ Dirty COW เกิดจาก Race Condition ใน mm/gup.c ของ Linux Kernel\n"
+            "     ผู้โจมตีที่มีสิทธิ์ Local User สามารถใช้ประโยชน์จากจังหวะแข่งขัน\n"
+            "     ระหว่าง Thread เพื่อเขียนข้อมูลลงใน Memory Mapping แบบ Read-Only ได้\n"
+            "     เช่น แก้ไขไฟล์ /etc/passwd หรือ SUID Binary เพื่อยกระดับสิทธิ์เป็น root\n"
+            "     ช่องโหว่นี้มีอายุกว่า 9 ปีก่อนถูกค้นพบ ถือว่าเป็นหนึ่งในช่องโหว่ที่อันตรายที่สุด"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต Kernel เป็นเวอร์ชัน 4.8.3 ขึ้นไปโดยเร็วที่สุด\n"
+            "     2. ใช้ systemd-nspawn หรือ SELinux/AppArmor เพื่อจำกัดสิทธิ์ผู้ใช้\n"
+            "     3. ตรวจสอบ integrity ของไฟล์ SUID ด้วย AIDE หรือ Tripwire\n"
+            "     4. ในกรณีฉุกเฉิน ใช้ kpatch live-patch โดยไม่ต้อง reboot ระบบ"
+        )
+    },
+    {
+        "cve": "CVE-2022-0847",
+        "name": "Dirty Pipe",
+        "category": "Pipe Buffer",
+        "affected_min": "5.8",
+        "affected_max": "5.16.10",
+        "cvss": 7.8,
+        "severity": "HIGH",
+        "description": "Flaw in pipe buffer flags allows overwriting read-only files including SUID binaries.",
+        "fix_commit": "9d2231c5d74e13b2a0546fee6737ee4446017903",
+        "patch_indicator": ["fs/pipe.c", "PIPE_BUF_FLAG_CAN_MERGE"],
+        "thai_detail": (
+            "ช่องโหว่ Dirty Pipe เกิดจากการตั้งค่า Flag ผิดพลาดใน Pipe Buffer\n"
+            "     ของ Linux Kernel โดยเฉพาะ Flag PIPE_BUF_FLAG_CAN_MERGE\n"
+            "     ผู้โจมตีสามารถเขียนทับไฟล์ที่ Read-Only ได้ รวมถึงไฟล์ SUID\n"
+            "     เช่น /usr/bin/passwd เพื่อฝัง Backdoor หรือยกระดับสิทธิ์เป็น root\n"
+            "     ค้นพบโดย Max Kellermann ในปี 2022 มีผลกระทบต่อ Container Runtime ด้วย"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต Kernel เป็น 5.16.11, 5.15.25, หรือ 5.10.102 ขึ้นไป\n"
+            "     2. ตรวจสอบว่า Distro ออก Security Patch แล้วหรือยัง (apt/yum update)\n"
+            "     3. ลด Attack Surface โดยจำกัดการรัน Untrusted Code บนระบบ\n"
+            "     4. ระบบ Container ควรอัปเดต Container Runtime (runc/containerd) ด้วย"
+        )
+    },
+    # ── sudo / userspace ──
+    {
+        "cve": "CVE-2021-3156",
+        "name": "Baron Samedit",
+        "category": "Heap Overflow",
+        "affected_min": "0.0.1",
+        "affected_max": "999.0.0",
+        "cvss": 7.8,
+        "severity": "HIGH",
+        "description": "Heap-based buffer overflow in sudo sudoedit allows privilege escalation to root.",
+        "note": "Affects sudo ≤ 1.9.5p1 — not kernel directly",
+        "patch_indicator": [],
+        "thai_detail": (
+            "ช่องโหว่ Baron Samedit เกิดจาก Heap Buffer Overflow ใน sudo\n"
+            "     โดยเฉพาะคำสั่ง sudoedit ที่จัดการ Argument อย่างไม่ปลอดภัย\n"
+            "     ผู้โจมตีที่มีบัญชี Local User ธรรมดา (ไม่ต้องอยู่ใน sudoers)\n"
+            "     สามารถยกระดับสิทธิ์เป็น root ได้ทันที ไม่ต้องรู้รหัสผ่าน\n"
+            "     ช่องโหว่นี้มีมานานกว่า 10 ปี ค้นพบโดย Qualys Research Team"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต sudo เป็นเวอร์ชัน 1.9.5p2 ขึ้นไป (sudo --version)\n"
+            "     2. ตรวจสอบ: sudoedit -s '\\' $(python3 -c 'print(\"A\"*65536)')\n"
+            "        ถ้าขึ้น error = ปลอดภัย, ถ้า crash = ยังมีช่องโหว่\n"
+            "     3. จำกัดสิทธิ์ sudo ให้เฉพาะผู้ใช้ที่จำเป็นใน /etc/sudoers\n"
+            "     4. ใช้ PAM Module เพิ่มเติมเพื่อ Log การใช้งาน sudo ทุกครั้ง"
+        )
+    },
+    # ── Filesystem ──
+    {
+        "cve": "CVE-2022-0185",
+        "name": "Filesystem Context Heap Overflow",
+        "category": "Heap Overflow",
+        "affected_min": "5.1",
+        "affected_max": "5.16.2",
+        "cvss": 8.4,
+        "severity": "HIGH",
+        "description": "Integer underflow in legacy_parse_param() in fs/fs_context.c allows heap overflow.",
+        "fix_commit": "722d94847de29310e8aa03fcbdb41300d6a8ef76",
+        "patch_indicator": ["fs/fs_context.c", "legacy_parse_param"],
+        "thai_detail": (
+            "ช่องโหว่นี้เกิดจาก Integer Underflow ในฟังก์ชัน legacy_parse_param()\n"
+            "     ใน fs/fs_context.c ทำให้เกิด Heap Buffer Overflow\n"
+            "     ผู้โจมตีที่มีสิทธิ์ CAP_SYS_ADMIN ภายใน User Namespace\n"
+            "     สามารถยกระดับสิทธิ์เป็น root บน Host ได้ อันตรายมากบนระบบ Container\n"
+            "     CVSS สูงถึง 8.4 เพราะสามารถ Escape จาก Container ออกมาได้"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต Kernel เป็น 5.16.2 ขึ้นไป\n"
+            "     2. ปิดการใช้ Unprivileged User Namespace:\n"
+            "        sysctl -w kernel.unprivileged_userns_clone=0\n"
+            "     3. ใช้ seccomp profile จำกัด syscall ใน Container\n"
+            "     4. ตรวจสอบและจำกัด CAP_SYS_ADMIN ใน Container Runtime"
+        )
+    },
+    {
+        "cve": "CVE-2023-0386",
+        "name": "OverlayFS Privilege Escalation",
+        "category": "Filesystem",
+        "affected_min": "5.11",
+        "affected_max": "6.2.0",
+        "cvss": 7.8,
+        "severity": "HIGH",
+        "description": "OverlayFS allows unprivileged users to copy SUID files into a mount, leading to privilege escalation.",
+        "fix_commit": "4f11ada10d0ad6aa9f3f298c9dc71e83e84d71a0",
+        "patch_indicator": ["fs/overlayfs", "ovl_copy_up"],
+        "thai_detail": (
+            "ช่องโหว่ OverlayFS เกิดจากการที่ Kernel อนุญาตให้ผู้ใช้ทั่วไป\n"
+            "     คัดลอกไฟล์ SUID เข้าไปใน OverlayFS Mount ได้\n"
+            "     ทำให้ผู้โจมตีสร้างไฟล์ SUID ของตัวเองและรันด้วยสิทธิ์ root ได้\n"
+            "     อันตรายมากในสภาพแวดล้อม Docker/Kubernetes ที่ใช้ OverlayFS\n"
+            "     เพราะ Container ใช้ OverlayFS เป็น Storage Driver หลัก"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต Kernel เป็น 6.2.1 ขึ้นไป\n"
+            "     2. ตรวจสอบ Docker/Kubernetes ใช้ Storage Driver อะไร:\n"
+            "        docker info | grep 'Storage Driver'\n"
+            "     3. ใช้ --no-new-privileges flag เมื่อรัน Container\n"
+            "     4. เปิด AppArmor/SELinux Profile สำหรับ Container Runtime\n"
+            "     5. ตรวจสอบว่า Distro ออก Backport Patch แล้วหรือยัง"
+        )
+    },
+    # ── Netfilter / Network ──
+    {
+        "cve": "CVE-2022-1015",
+        "name": "Netfilter OOB Write",
+        "category": "Netfilter",
+        "affected_min": "5.12",
+        "affected_max": "5.17.1",
+        "cvss": 6.6,
+        "severity": "MEDIUM",
+        "description": "Out-of-bound write in nf_tables_newrule() allows local privilege escalation.",
+        "fix_commit": "d44f9f9f02a2f50bf1e3a3012d29e9af3fefbba3",
+        "patch_indicator": ["net/netfilter/nf_tables_api.c"],
+        "thai_detail": (
+            "ช่องโหว่นี้อยู่ใน nf_tables ของ Netfilter Framework\n"
+            "     ฟังก์ชัน nf_tables_newrule() มีการเขียนข้อมูลเกินขอบเขต Memory\n"
+            "     ผู้โจมตีที่มีสิทธิ์ CAP_NET_ADMIN สามารถ Trigger OOB Write\n"
+            "     เพื่อยกระดับสิทธิ์หรือทำให้ระบบ Crash (Denial of Service)\n"
+            "     มักถูกใช้คู่กับ CVE-2022-1016 เพื่อโจมตีแบบต่อเนื่อง"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต Kernel เป็น 5.17.2 ขึ้นไป\n"
+            "     2. จำกัดการเข้าถึง nftables สำหรับผู้ใช้ทั่วไป:\n"
+            "        sysctl -w kernel.unprivileged_userns_clone=0\n"
+            "     3. ตรวจสอบและจำกัด CAP_NET_ADMIN ใน Container\n"
+            "     4. ใช้ seccomp เพื่อบล็อก socket() syscall ที่ไม่จำเป็น"
+        )
+    },
+    {
+        "cve": "CVE-2022-1016",
+        "name": "Netfilter Use-After-Free",
+        "category": "Netfilter",
+        "affected_min": "5.12",
+        "affected_max": "5.17.1",
+        "cvss": 5.5,
+        "severity": "MEDIUM",
+        "description": "Use-after-free in nf_tables may lead to information disclosure.",
+        "fix_commit": "d44f9f9f02a2f50bf1e3a3012d29e9af3fefbba3",
+        "patch_indicator": ["net/netfilter/nf_tables_api.c"],
+        "thai_detail": (
+            "ช่องโหว่ Use-After-Free ใน nf_tables ทำให้ Kernel อ่านข้อมูล\n"
+            "     จาก Memory ที่ถูก Free ไปแล้ว นำไปสู่การรั่วไหลของข้อมูลสำคัญ\n"
+            "     เช่น Kernel Pointer ที่ใช้ Bypass KASLR (Kernel Address Layout Randomization)\n"
+            "     มักถูกใช้เป็นขั้นตอนแรกของการโจมตีก่อนใช้ CVE-2022-1015\n"
+            "     เพื่อทำการ Privilege Escalation แบบสมบูรณ์"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต Kernel เป็น 5.17.2 ขึ้นไป (แก้ทั้ง 1015 และ 1016)\n"
+            "     2. เปิด Kernel Pointer Restrictions:\n"
+            "        sysctl -w kernel.kptr_restrict=2\n"
+            "     3. ปิด dmesg สำหรับ Unprivileged Users:\n"
+            "        sysctl -w kernel.dmesg_restrict=1\n"
+            "     4. ใช้ GRSecurity/PaX ถ้าต้องการความปลอดภัยสูงสุด"
+        )
+    },
+    {
+        "cve": "CVE-2023-32233",
+        "name": "Netfilter nf_tables UAF",
+        "category": "Netfilter",
+        "affected_min": "5.1",
+        "affected_max": "6.3.1",
+        "cvss": 7.8,
+        "severity": "HIGH",
+        "description": "Use-after-free in nf_tables batch handling allows local privilege escalation.",
+        "fix_commit": "c1592a89942e9678f7d9c8030efa777c0d57edab",
+        "patch_indicator": ["net/netfilter/nf_tables_api.c", "nf_tables_del_setelem"],
+        "thai_detail": (
+            "ช่องโหว่ Use-After-Free ใน Batch Handling ของ nf_tables\n"
+            "     เกิดจากการที่ nf_tables_del_setelem() ไม่ตรวจสอบ State ให้ถูกต้อง\n"
+            "     ผู้โจมตีสามารถสร้าง Batch Request พิเศษเพื่อ Free Memory\n"
+            "     แล้วใช้ Dangling Pointer นั้นยกระดับสิทธิ์เป็น root ได้\n"
+            "     มี Exploit สาธารณะแล้ว ถือว่าอันตรายมากและต้องแพตช์ทันที"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต Kernel เป็น 6.3.2 ขึ้นไป โดยด่วน\n"
+            "     2. ปิด Unprivileged User Namespaces ชั่วคราว:\n"
+            "        echo 0 > /proc/sys/kernel/unprivileged_userns_clone\n"
+            "     3. ตรวจสอบ Log หา Exploit Attempt:\n"
+            "        dmesg | grep -i 'netfilter\\|nf_tables'\n"
+            "     4. ใช้ Snort/Suricata Rules ตรวจจับ Exploitation Attempt"
+        )
+    },
+    {
+        "cve": "CVE-2023-35788",
+        "name": "Flower Classifier OOB",
+        "category": "Network",
+        "affected_min": "4.14",
+        "affected_max": "6.3.3",
+        "cvss": 7.8,
+        "severity": "HIGH",
+        "description": "Out-of-bounds write in fl_set_geneve_opt() in net/sched/cls_flower.c.",
+        "fix_commit": "4d56304e5827c8cc8cc18c75343d283af7c4825c",
+        "patch_indicator": ["net/sched/cls_flower.c", "fl_set_geneve_opt"],
+        "thai_detail": (
+            "ช่องโหว่อยู่ใน Traffic Control Flower Classifier ของ Linux Kernel\n"
+            "     ฟังก์ชัน fl_set_geneve_opt() ไม่ตรวจสอบขนาด Option ของ Geneve Protocol\n"
+            "     ทำให้เกิด Out-of-Bounds Write ใน Heap Memory\n"
+            "     ผู้โจมตีที่มี CAP_NET_ADMIN สามารถ Trigger เพื่อยกระดับสิทธิ์\n"
+            "     หรือรันโค้ดอันตรายใน Kernel Space ได้"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต Kernel เป็น 6.3.4 ขึ้นไป\n"
+            "     2. ถ้าไม่ใช้ Geneve Tunneling ให้ Blacklist Module:\n"
+            "        echo 'blacklist geneve' >> /etc/modprobe.d/blacklist.conf\n"
+            "     3. จำกัดสิทธิ์ CAP_NET_ADMIN ด้วย Capability Dropping\n"
+            "     4. ใช้ Network Policy บน Kubernetes เพื่อลดการเข้าถึง"
+        )
+    },
+    # ── Memory / UAF ──
+    {
+        "cve": "CVE-2021-22555",
+        "name": "Netfilter Heap Out-of-Bounds Write",
+        "category": "Heap Overflow",
+        "affected_min": "2.6.19",
+        "affected_max": "5.12.13",
+        "cvss": 7.8,
+        "severity": "HIGH",
+        "description": "Heap OOB write in xt_compat_target_from_user() in net/netfilter/x_tables.c.",
+        "fix_commit": "b29c457a6511435960115c0f548c4360d5f4801d",
+        "patch_indicator": ["net/netfilter/x_tables.c", "xt_compat_target_from_user"],
+        "thai_detail": (
+            "ช่องโหว่อยู่ในฟังก์ชัน xt_compat_target_from_user() ใน x_tables.c\n"
+            "     เกิดจากการคำนวณขนาด Buffer ผิดพลาดเมื่อแปลง iptables Rules\n"
+            "     จาก 32-bit ไป 64-bit ทำให้เกิด Heap OOB Write\n"
+            "     ผู้โจมตีที่มีสิทธิ์ CAP_NET_ADMIN สามารถใช้เพื่อ\n"
+            "     รันโค้ดอันตรายใน Kernel Space หรือยกระดับสิทธิ์เป็น root"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต Kernel เป็น 5.12.14 ขึ้นไป\n"
+            "     2. ใช้ nftables แทน iptables (ปลอดภัยกว่าและได้รับการ Maintain มากกว่า)\n"
+            "     3. จำกัด CAP_NET_ADMIN ด้วย systemd Service Hardening:\n"
+            "        CapabilityBoundingSet=~CAP_NET_ADMIN\n"
+            "     4. เปิด CONFIG_HARDENED_USERCOPY เพื่อตรวจจับ OOB อัตโนมัติ"
+        )
+    },
+    {
+        "cve": "CVE-2022-27666",
+        "name": "ESP Transformation Heap Overflow",
+        "category": "IPSec",
+        "affected_min": "5.10",
+        "affected_max": "5.17.2",
+        "cvss": 7.8,
+        "severity": "HIGH",
+        "description": "Heap buffer overflow in IPSec ESP transformation (net/ipv4/esp4.c).",
+        "fix_commit": "ebe48d368e97d007bfeb76fcb065d6a511d09b37",
+        "patch_indicator": ["net/ipv4/esp4.c", "esp_output_tail"],
+        "thai_detail": (
+            "ช่องโหว่อยู่ใน IPSec ESP (Encapsulating Security Payload) ของ Kernel\n"
+            "     ฟังก์ชัน esp_output_tail() ใน esp4.c คำนวณขนาด Buffer ผิดพลาด\n"
+            "     ทำให้เกิด Heap Buffer Overflow เมื่อประมวลผล ESP Packet\n"
+            "     ผู้โจมตีที่อยู่ในระบบเดียวกันสามารถส่ง Packet พิเศษ\n"
+            "     เพื่อยกระดับสิทธิ์หรือทำให้ระบบ Crash ได้"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต Kernel เป็น 5.17.3 ขึ้นไป\n"
+            "     2. ถ้าไม่ได้ใช้ IPSec ให้ปิด Module:\n"
+            "        echo 'install esp4 /bin/true' >> /etc/modprobe.d/disable-esp.conf\n"
+            "     3. ใช้ WireGuard แทน IPSec ซึ่งมีโค้ดน้อยกว่าและปลอดภัยกว่า\n"
+            "     4. ตรวจสอบ Network Segmentation ให้ผู้ใช้ไม่สามารถส่ง ESP Packet ได้"
+        )
+    },
+    # ── SUID / Capabilities ──
+    {
+        "cve": "CVE-2021-4034",
+        "name": "PwnKit (pkexec)",
+        "category": "SUID",
+        "affected_min": "0.0.1",
+        "affected_max": "999.0.0",
+        "cvss": 7.8,
+        "severity": "HIGH",
+        "description": "Memory corruption in pkexec (polkit) allows unprivileged local privilege escalation.",
+        "note": "Affects polkit < 0.120 — not kernel directly",
+        "patch_indicator": [],
+        "thai_detail": (
+            "ช่องโหว่ PwnKit อยู่ใน pkexec ซึ่งเป็นส่วนหนึ่งของ polkit\n"
+            "     เกิดจาก Memory Corruption ในการประมวลผล Argument ของ pkexec\n"
+            "     ช่องโหว่มีมานานกว่า 12 ปี (ตั้งแต่ polkit เวอร์ชันแรก)\n"
+            "     ผู้ใช้ Local ทุกคนสามารถยกระดับสิทธิ์เป็น root ได้ทันที\n"
+            "     ไม่จำเป็นต้องมี pkexec ในระบบก็ได้รับผลกระทบถ้า polkit ติดตั้งอยู่"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต polkit เป็นเวอร์ชัน 0.120 ขึ้นไปทันที\n"
+            "     2. ตรวจสอบเวอร์ชัน: pkexec --version\n"
+            "     3. แก้ไขชั่วคราว: chmod 0755 /usr/bin/pkexec (ลบ SUID bit)\n"
+            "        หมายเหตุ: อาจทำให้บางแอปที่ใช้ pkexec ไม่ทำงาน\n"
+            "     4. ตรวจสอบ Audit Log หาการ Exploit:\n"
+            "        ausearch -m avc -ts recent | grep pkexec"
+        )
+    },
+    # ── Container Escape ──
+    {
+        "cve": "CVE-2022-0492",
+        "name": "cgroup v1 Container Escape",
+        "category": "Container",
+        "affected_min": "2.6.24",
+        "affected_max": "5.17.0",
+        "cvss": 7.0,
+        "severity": "HIGH",
+        "description": "Flaw in cgroup v1 release_agent allows container escape to host.",
+        "fix_commit": "3007098494e3aa7eef8f0d73eabe7b691f9d6200",
+        "patch_indicator": ["kernel/cgroup/cgroup-v1.c", "release_agent"],
+        "thai_detail": (
+            "ช่องโหว่อยู่ใน cgroup v1 release_agent ของ Linux Kernel\n"
+            "     release_agent คือ Script ที่รันเมื่อ Process กลุ่มหนึ่งสิ้นสุด\n"
+            "     ผู้โจมตีใน Container สามารถแก้ไข release_agent\n"
+            "     เพื่อรันคำสั่งบน Host โดยตรง ทำให้หลุดออกจาก Container ได้\n"
+            "     อันตรายมากสำหรับระบบ Docker, Kubernetes, และ LXC"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต Kernel เป็น 5.17.1 ขึ้นไป\n"
+            "     2. ใช้ cgroup v2 แทน cgroup v1 (ปลอดภัยกว่า):\n"
+            "        เพิ่ม 'systemd.unified_cgroup_hierarchy=1' ใน Kernel Parameter\n"
+            "     3. รัน Container ด้วย --privileged=false (ค่า Default)\n"
+            "     4. ใช้ Seccomp Profile และ AppArmor/SELinux บน Container\n"
+            "     5. ตรวจสอบ release_agent: cat /sys/fs/cgroup/release_agent"
+        )
+    },
+    {
+        "cve": "CVE-2022-25636",
+        "name": "Netfilter Heap OOB in nft_fwd_dup",
+        "category": "Container",
+        "affected_min": "5.4",
+        "affected_max": "5.16.12",
+        "cvss": 7.8,
+        "severity": "HIGH",
+        "description": "Heap OOB read/write in nft_fwd_dup_netdev_offload() — exploitable for container escape.",
+        "fix_commit": "fdb3b8f4714e7b0339a91a2a067a0fe8d0e67c42",
+        "patch_indicator": ["net/netfilter/nft_fwd_dup.c"],
+        "thai_detail": (
+            "ช่องโหว่อยู่ในฟังก์ชัน nft_fwd_dup_netdev_offload() ของ nft_fwd_dup.c\n"
+            "     เกิด Heap OOB Read/Write เมื่อประมวลผล Netdev Offload Rules\n"
+            "     ผู้โจมตีสามารถใช้ประโยชน์เพื่อ Escape ออกจาก Container\n"
+            "     ไปยัง Host และยกระดับสิทธิ์เป็น root บน Host ได้\n"
+            "     อันตรายมากในสภาพแวดล้อม Multi-Tenant Cloud"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต Kernel เป็น 5.16.13 ขึ้นไป\n"
+            "     2. ปิด Netdev Offload ถ้าไม่จำเป็น\n"
+            "     3. จำกัด CAP_NET_ADMIN ภายใน Container อย่างเข้มงวด\n"
+            "     4. ใช้ Kata Containers หรือ gVisor สำหรับการแยก Container แบบ Strong Isolation\n"
+            "     5. ตรวจสอบ Network Driver ที่ใช้ว่ารองรับ Offload หรือไม่"
+        )
+    },
+    # ── CVSS Critical ──
+    {
+        "cve": "CVE-2017-5753",
+        "name": "Spectre v1",
+        "category": "CPU Speculative",
+        "affected_min": "2.6.0",
+        "affected_max": "4.15.0",
+        "cvss": 5.6,
+        "severity": "MEDIUM",
+        "description": "Bounds check bypass via speculative execution allows information disclosure.",
+        "patch_indicator": [],
+        "thai_detail": (
+            "ช่องโหว่ Spectre v1 เป็นปัญหาระดับ Hardware ใน CPU สมัยใหม่\n"
+            "     CPU ทำการ Speculative Execution (คาดเดาและรันโค้ดล่วงหน้า)\n"
+            "     ผู้โจมตีสามารถหลอก CPU ให้อ่านข้อมูลจาก Memory ที่ไม่มีสิทธิ์\n"
+            "     แล้วใช้ Cache Timing Attack เพื่อดึงข้อมูลนั้น เช่น Password, Key\n"
+            "     ส่งผลต่อ CPU ของ Intel, AMD, ARM เกือบทุกรุ่นที่ผลิตหลังปี 1995"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต Kernel และเปิด Mitigation (IBRS, IBPB, STIBP):\n"
+            "        grep . /sys/devices/system/cpu/vulnerabilities/*\n"
+            "     2. อัปเดต CPU Microcode (intel-microcode / amd64-microcode)\n"
+            "     3. เปิด Retpoline Compiler Mitigation (ค่า Default บน Kernel ใหม่)\n"
+            "     4. บน VM/Cloud: ใช้ CPU ที่รองรับ Enhanced IBRS\n"
+            "     5. ยอมรับว่าอาจมีผลต่อ Performance 5-30% บน Workload บางประเภท"
+        )
+    },
+    {
+        "cve": "CVE-2017-5754",
+        "name": "Meltdown",
+        "category": "CPU Speculative",
+        "affected_min": "2.6.0",
+        "affected_max": "4.15.0",
+        "cvss": 5.6,
+        "severity": "MEDIUM",
+        "description": "Rogue data cache load via speculative execution allows kernel memory read from userspace.",
+        "patch_indicator": [],
+        "thai_detail": (
+            "ช่องโหว่ Meltdown รุนแรงกว่า Spectre v1 เพราะอนุญาตให้\n"
+            "     Userspace Process อ่าน Kernel Memory ได้โดยตรง\n"
+            "     ใช้ Speculative Execution ที่ CPU ทำก่อนตรวจสอบ Permission\n"
+            "     ข้อมูลที่รั่วได้ เช่น Kernel Stack, Password Hash, Private Key\n"
+            "     แก้ไขด้วย KPTI (Kernel Page-Table Isolation) ซึ่งอาจลด Performance"
+        ),
+        "thai_mitigation": (
+            "1. อัปเดต Kernel เป็น 4.15+ ที่มี KPTI (PTI) เปิดอยู่\n"
+            "        ตรวจสอบ: cat /sys/devices/system/cpu/vulnerabilities/meltdown\n"
+            "     2. อัปเดต CPU Microcode ให้เป็นเวอร์ชันล่าสุด\n"
+            "     3. บน VM: ตรวจสอบว่า Hypervisor รองรับ Mitigation แล้วหรือยัง\n"
+            "     4. ปิด Hyperthreading ถ้าต้องการความปลอดภัยสูงสุด (ลด Performance ~50%)\n"
+            "     5. ใช้ Hardware รุ่นใหม่ที่ Fix ช่องโหว่ใน Silicon โดยตรง"
+        )
+    },
+]
 
-def cvss_bar(score, width=20):
-    filled = int((score / 10.0) * width)
-    bar = "█" * filled + "░" * (width - filled)
-    color = Color.RED if score >= 7 else (Color.YELLOW if score >= 4 else Color.GREEN)
-    return f"{color}{bar}{Color.RESET} {Color.BOLD}{score:.1f}{Color.RESET}"
+# ==============================
+# Severity Helpers
+# ==============================
+SEVERITY_COLOR = {
+    "CRITICAL": Color.BG_RED + Color.BOLD,
+    "HIGH":     Color.RED + Color.BOLD,
+    "MEDIUM":   Color.YELLOW,
+    "LOW":      Color.GREEN,
+    "NONE":     Color.GRAY,
+}
 
 def severity_from_cvss(score):
     if score >= 9.0: return "CRITICAL"
     if score >= 7.0: return "HIGH"
     if score >= 4.0: return "MEDIUM"
-    return "LOW"
+    if score > 0:    return "LOW"
+    return "NONE"
+
+def severity_badge(sev):
+    color = SEVERITY_COLOR.get(sev, Color.GRAY)
+    return f"{color} {sev} {Color.RESET}"
+
+def cvss_bar(score, width=20):
+    filled = int((score / 10.0) * width)
+    bar = "█" * filled + "░" * (width - filled)
+    if score >= 7:
+        color = Color.RED
+    elif score >= 4:
+        color = Color.YELLOW
+    else:
+        color = Color.GREEN
+    return f"{color}{bar}{Color.RESET} {Color.BOLD}{score:.1f}{Color.RESET}"
 
 # ==============================
-# CVE Database
+# System Information
 # ==============================
-CVE_DB = [
-    {
-        "cve": "CVE-2016-1247",
-        "name": "Debian Cron Log Dir Privilege Escalation",
-        "software": ["debian cron"],
-        "affected_version": "<3.0.0",
-        "cvss": 7.8,
-        "category": "File Permission",
-        "description": "World-writable /var/log/cron allows local users to replace log files with symlinks via logrotate, leading to root privilege escalation.",
-        "description_th": "หาก /var/log/cron เขียนได้โดยทุกคน ผู้ใช้ทั่วไปสามารถแทนที่ log file ด้วย symlink เพื่อให้ logrotate ซึ่งรันเป็น root เขียนทับไฟล์เป้าหมาย",
-        "impact_th": "ผู้โจมตีสร้าง symlink /var/log/cron → /etc/passwd แล้วรอ logrotate รันตามตาราง → /etc/passwd ถูก overwrite → เพิ่ม root account ได้",
-        "check": "log_permission",
-        "remediation": "chmod 755 /var/log/cron && chown root:adm /var/log/cron",
-        "prevention_th": [
-            "แก้ permission ทันที: chmod 755 /var/log/cron && chown root:adm /var/log/cron",
-            "ตรวจสอบ logrotate config: grep -r 'create' /etc/logrotate.d/cron",
-            "Monitor symlink ใน log dir: auditctl -w /var/log/cron -p wa -k cron_log",
-            "ใช้ ACL แทนการ world-writable: setfacl -m u:cron:rw /var/log/cron",
-        ],
-    },
-    {
-        "cve": "CVE-2019-9706",
-        "name": "Cronie Use-After-Free",
-        "software": ["cronie"],
-        "affected_version": "<1.5.3",
-        "cvss": 7.2,
-        "category": "Memory Corruption",
-        "description": "Use-after-free in Cronie allows local users to cause denial of service or escalate privileges via malformed crontab.",
-        "description_th": "ช่องโหว่ use-after-free ใน cronie เกิดจากการ free memory ก่อนที่จะใช้งานเสร็จ ทำให้ผู้โจมตีสามารถเขียนทับ memory ที่ถูก free ไปแล้วเพื่อควบคุม execution",
-        "impact_th": "ผู้โจมตีสร้าง crontab ที่มี format พิเศษเพื่อ trigger use-after-free → cronie crash (DoS) หรือ execute arbitrary code ในฐานะ cron daemon ซึ่งรันเป็น root",
-        "check": "symlink_check",
-        "remediation": "Upgrade cronie >= 1.5.3",
-        "prevention_th": [
-            "อัปเกรด cronie ทันที: apt upgrade cron หรือ yum upgrade cronie",
-            "ตรวจสอบเวอร์ชัน: cron --version หรือ dpkg -l cron",
-            "จำกัดสิทธิ์การแก้ไข crontab เฉพาะ user ที่จำเป็น: /etc/cron.allow",
-            "Monitor crontab changes: auditctl -w /var/spool/cron -p wa -k crontab_mod",
-        ],
-    },
-    {
-        "cve": "CVE-2017-9525",
-        "name": "Vixie Cron Group Crontab Privilege Escalation",
-        "software": ["vixie", "vixie-cron", "debian cron", "cronie"],
-        "affected_version": "<999.0",
-        "cvss": 6.5,
-        "category": "Permission",
-        "description": "Cron sets SGID on crontab binary, allowing members of the crontab group to escalate privileges.",
-        "description_th": "Vixie cron ตั้ง SGID bit บน /usr/bin/crontab ทำให้สมาชิกของ group 'crontab' สามารถใช้ crontab ในฐานะ group crontab และยกระดับสิทธิ์ได้",
-        "impact_th": "ผู้โจมตีที่อยู่ใน group 'crontab' สามารถแก้ไข crontab ของ user อื่นหรือใช้ประโยชน์จาก SGID เพื่อเข้าถึงไฟล์ที่ group crontab เป็นเจ้าของ",
-        "check": "crontab_sgid",
-        "remediation": "chmod g-s /usr/bin/crontab && upgrade vixie-cron",
-        "prevention_th": [
-            "ถอด SGID bit: chmod g-s /usr/bin/crontab",
-            "ตรวจสอบสมาชิก group crontab: getent group crontab",
-            "ลบ user ที่ไม่จำเป็นออกจาก crontab group: gpasswd -d username crontab",
-            "อัปเกรด vixie-cron เป็นเวอร์ชันล่าสุด",
-        ],
-    },
-    {
-        "cve": "CVE-2019-13224",
-        "name": "dcron Privilege Escalation",
-        "software": ["dcron"],
-        "affected_version": "<4.5",
-        "cvss": 7.5,
-        "category": "Access Control",
-        "description": "dcron allows local users to run cron jobs as other users due to insufficient permission checks.",
-        "description_th": "dcron ตรวจสอบ permission ไม่เพียงพอ ทำให้ผู้ใช้ทั่วไปสามารถรัน cron job ในฐานะ user อื่นได้ รวมถึง root",
-        "impact_th": "ผู้โจมตีสร้าง crontab entry ที่ระบุ user อื่นเป็นเจ้าของ job → dcron รัน command ในฐานะ user นั้นโดยไม่ตรวจสอบสิทธิ์ → ได้ shell ในฐานะ root",
-        "check": "version_only",
-        "remediation": "Upgrade dcron >= 4.5",
-        "prevention_th": [
-            "อัปเกรด dcron เป็นเวอร์ชัน 4.5 ขึ้นไปทันที",
-            "พิจารณาเปลี่ยนไปใช้ cronie หรือ debian cron ที่มีการ maintain ดีกว่า",
-            "จำกัด user ที่ใช้ cron ได้ผ่าน /etc/cron.allow: echo 'root' > /etc/cron.allow",
-            "Monitor การรัน cron job ของ user ต่างๆ: grep CRON /var/log/syslog",
-        ],
-    },
-    {
-        "cve": "CVE-2023-22467",
-        "name": "Cronie Crontab Buffer Overflow",
-        "software": ["cronie"],
-        "affected_version": "<1.6.1",
-        "cvss": 8.4,
-        "category": "Buffer Overflow",
-        "description": "Buffer overflow in cronie crontab parsing allows local privilege escalation.",
-        "description_th": "ช่องโหว่ buffer overflow ใน cronie เกิดระหว่างการ parse crontab file ผู้โจมตีสามารถสร้าง crontab entry ที่มีขนาดพิเศษเพื่อ overflow buffer และควบคุม execution flow",
-        "impact_th": "ผู้โจมตีสร้าง crontab ที่มี field ยาวเกิน buffer ที่กำหนด → stack/heap overflow → overwrite return address → execute shellcode ในฐานะ crond daemon (root)",
-        "check": "version_only",
-        "remediation": "Upgrade cronie >= 1.6.1",
-        "prevention_th": [
-            "อัปเกรด cronie เป็นเวอร์ชัน 1.6.1 ขึ้นไปทันที: apt upgrade cron",
-            "ตรวจสอบเวอร์ชันปัจจุบัน: dpkg -l cron | grep cron",
-            "จำกัดการเขียน crontab เฉพาะ user ที่จำเป็น: chmod 600 /var/spool/cron/crontabs/*",
-            "เปิดใช้ stack protection: ตรวจสอบว่า kernel มี ASLR: cat /proc/sys/kernel/randomize_va_space",
-        ],
-    },
-    {
-        "cve": "CVE-2021-4034",
-        "name": "PwnKit via Cron Environment Injection",
-        "software": ["cronie", "debian cron", "vixie", "dcron"],
-        "affected_version": "<999.0",
-        "cvss": 7.8,
-        "category": "ENV Injection",
-        "description": "Cron jobs that execute pkexec or polkit-dependent scripts are vulnerable to environment variable injection leading to root escalation.",
-        "description_th": "Cron job ที่เรียก pkexec หรือ script ที่ใช้ polkit มีความเสี่ยงต่อการ inject environment variable เนื่องจาก pkexec มีช่องโหว่ในการจัดการ argv/envp",
-        "impact_th": "ผู้โจมตีตั้ง environment variable ก่อน cron job รัน → cron เรียก pkexec → pkexec โหลด malicious shared object จาก env var → ได้ root shell ทันที",
-        "check": "cron_env_injection",
-        "remediation": "Audit cron jobs for pkexec usage. Upgrade polkit >= 0.120.",
-        "prevention_th": [
-            "อัปเกรด polkit ทันที: apt upgrade policykit-1",
-            "ตรวจสอบ cron job ที่เรียก pkexec: grep -r 'pkexec' /etc/cron*",
-            "แทนที่ pkexec ด้วย sudo ที่กำหนด policy ชัดเจน",
-            "ถอด SUID จาก pkexec ชั่วคราว: chmod 0755 /usr/bin/pkexec",
-            "ตรวจสอบ env var ที่ cron ส่งต่อ: env_reset ใน /etc/sudoers",
-        ],
-    },
-    {
-        "cve": "CVE-2022-0847",
-        "name": "Dirty Pipe via Cron Log Overwrite",
-        "software": ["cronie", "debian cron", "vixie", "dcron"],
-        "affected_version": "<999.0",
-        "cvss": 7.8,
-        "category": "Kernel",
-        "description": "World-writable cron log files combined with Dirty Pipe kernel vulnerability allow overwriting read-only files as root.",
-        "description_th": "หาก cron log file เขียนได้โดยทุกคน ร่วมกับช่องโหว่ Dirty Pipe ใน kernel ผู้โจมตีสามารถเขียนทับ read-only file ผ่าน pipe buffer ที่ cron เปิดไว้",
-        "impact_th": "ผู้โจมตีใช้ writable cron log เป็น file descriptor ที่เปิดไว้แล้ว trigger Dirty Pipe → เขียนทับ SUID binary หรือ /etc/passwd → ได้ root",
-        "check": "log_permission",
-        "remediation": "chmod 640 /var/log/cron && Upgrade kernel >= 5.16.11",
-        "prevention_th": [
-            "แก้ permission cron log: chmod 640 /var/log/cron && chown root:adm /var/log/cron",
-            "อัปเกรด kernel เป็นเวอร์ชัน 5.16.11, 5.15.25, หรือ 5.10.102: apt upgrade linux-image-$(uname -r)",
-            "ตรวจสอบเวอร์ชัน kernel: uname -r",
-            "ใช้ IMA เพื่อตรวจจับการแก้ไข SUID binary",
-        ],
-    },
-    {
-        "cve": "CVE-2016-2779",
-        "name": "Cron Insecure Temp File Creation",
-        "software": ["vixie", "vixie-cron", "debian cron"],
-        "affected_version": "<4.1",
-        "cvss": 7.0,
-        "category": "Temp File",
-        "description": "Cron creates temporary files insecurely in /tmp, allowing symlink attacks by local users to overwrite arbitrary files.",
-        "description_th": "Cron สร้าง temporary file ใน /tmp โดยไม่ตรวจสอบ symlink attack ทำให้ผู้โจมตีสร้าง symlink ที่มีชื่อเดียวกับ temp file ไว้ล่วงหน้า แล้วให้ cron เขียนทับไฟล์เป้าหมาย",
-        "impact_th": "ผู้โจมตีสร้าง /tmp/cron_tmp_XXXX → /etc/shadow ไว้ก่อน → เมื่อ cron สร้าง temp file ชื่อเดียวกัน จะ follow symlink → เขียนทับ /etc/shadow ด้วย content ที่ควบคุมได้",
-        "check": "world_writable_tmp",
-        "remediation": "Ensure /tmp has sticky bit: chmod 1777 /tmp",
-        "prevention_th": [
-            "ตั้ง sticky bit บน /tmp: chmod 1777 /tmp",
-            "Mount /tmp ด้วย noexec,nosuid: mount -o remount,noexec,nosuid /tmp",
-            "ใช้ mkstemp() แทน tempnam() ใน script (สำหรับ developer)",
-            "อัปเกรด cron เป็นเวอร์ชันที่ใช้ mkstemp() อย่างถูกต้อง",
-            "ตรวจสอบ cron script ที่สร้างไฟล์ใน /tmp: grep -r '/tmp' /etc/cron*",
-        ],
-    },
-    {
-        "cve": "CVE-2018-15686",
-        "name": "Cron Symlink Attack via cron.d",
-        "software": ["cronie", "debian cron"],
-        "affected_version": "<1.5.5",
-        "cvss": 8.0,
-        "category": "Symlink",
-        "description": "Malicious symlinks in /etc/cron.d allow cron to execute attacker-controlled files as root.",
-        "description_th": "หาก /etc/cron.d มี symlink ที่ผู้โจมตีสร้างไว้ cron daemon จะ follow symlink และ execute ไฟล์ปลายทางในฐานะ root โดยไม่ตรวจสอบความปลอดภัย",
-        "impact_th": "ผู้โจมตีสร้าง symlink ใน /etc/cron.d ชี้ไปยัง script ที่ตัวเองควบคุม → cron อ่านและรัน script นั้นในฐานะ root ตามตารางเวลา → ได้ root shell แบบ persistent",
-        "check": "symlink_check",
-        "remediation": "chmod 755 /etc/cron.d && audit symlinks: find /etc/cron.d -type l",
-        "prevention_th": [
-            "ตรวจสอบ symlink ใน cron.d: find /etc/cron.d -type l -ls",
-            "ลบ symlink ที่ไม่รู้จัก: find /etc/cron.d -type l -delete",
-            "แก้ permission: chmod 755 /etc/cron.d && chown root:root /etc/cron.d",
-            "อัปเกรด cronie/cron: apt upgrade cron",
-            "Monitor การเปลี่ยนแปลงใน cron.d: auditctl -w /etc/cron.d -p wa -k crond_change",
-        ],
-    },
-    {
-        "cve": "CVE-2019-14287",
-        "name": "Cron sudo Runas Bypass",
-        "software": ["cronie", "debian cron", "vixie", "dcron"],
-        "affected_version": "<999.0",
-        "cvss": 8.8,
-        "category": "sudo",
-        "description": "Cron jobs using sudo with runas ALL are vulnerable to sudo -u#-1 bypass, allowing privilege escalation to root.",
-        "description_th": "Cron job ที่ใช้ sudo กับ runas ALL มีความเสี่ยง เนื่องจาก sudo เวอร์ชันเก่าอนุญาตให้ใช้ -u#-1 ซึ่ง resolve เป็น UID 0 (root) แม้จะถูกห้าม",
-        "impact_th": "Cron script ที่มี 'sudo -u ... command' สามารถถูก exploit ด้วย 'sudo -u#-1 /bin/bash' → ได้ root shell แม้ sudoers จะห้ามรันในฐานะ root โดยตรง",
-        "check": "crontab_sudo_all",
-        "remediation": "Upgrade sudo >= 1.8.28. Audit crontabs for sudo ALL entries.",
-        "prevention_th": [
-            "อัปเกรด sudo เป็นเวอร์ชัน 1.8.28 ขึ้นไป: apt upgrade sudo",
-            "ตรวจสอบ cron job ที่ใช้ sudo: grep -r 'sudo' /etc/cron* /var/spool/cron/",
-            "แทนที่ sudo ALL ด้วยการระบุ user/command ที่ชัดเจนใน sudoers",
-            "ใช้ 'Defaults!command noexec' เพื่อป้องกัน command injection",
-            "Audit sudoers เป็นประจำ: visudo -c && sudo -l",
-        ],
-    },
-    {
-        "cve": "CVE-2020-12100",
-        "name": "Cron Arbitrary File Read via Symlink",
-        "software": ["cronie"],
-        "affected_version": "<1.5.5",
-        "cvss": 5.5,
-        "category": "Information Disclosure",
-        "description": "Cronie follows symlinks when reading crontab files, allowing local users to read arbitrary files as the cron daemon.",
-        "description_th": "cronie ตาม symlink ขณะอ่าน crontab file ทำให้ผู้ใช้ทั่วไปสร้าง symlink ใน /var/spool/cron ชี้ไปยังไฟล์ sensitive แล้ว cron daemon จะอ่านไฟล์นั้น",
-        "impact_th": "ผู้โจมตีสร้าง symlink /var/spool/cron/username → /etc/shadow → cron daemon อ่าน /etc/shadow และ log ข้อมูลหรือ error messages ที่มี content ของ /etc/shadow",
-        "check": "symlink_check",
-        "remediation": "Upgrade cronie >= 1.5.5. Audit /var/spool/cron for symlinks.",
-        "prevention_th": [
-            "อัปเกรด cronie เป็นเวอร์ชัน 1.5.5 ขึ้นไป",
-            "ตรวจสอบ symlink ใน spool: find /var/spool/cron -type l -ls",
-            "แก้ permission: chmod 700 /var/spool/cron && chmod 600 /var/spool/cron/*",
-            "ลบ crontab ที่ไม่รู้จัก: crontab -r -u suspicious_user",
-        ],
-    },
-    {
-        "cve": "CVE-2015-1318",
-        "name": "OverlayFS via Cron Script",
-        "software": ["debian cron", "cronie"],
-        "affected_version": "<999.0",
-        "cvss": 6.5,
-        "category": "Filesystem",
-        "description": "Cron scripts running as root that use overlayfs paths are vulnerable to container escape / privilege escalation.",
-        "description_th": "Cron script ที่รันเป็น root และเขียนได้โดยทุกคน เปิดช่องให้ผู้โจมตีแก้ไข script เพื่อ inject command หรือใช้ overlayfs เพื่อ escape จาก container",
-        "impact_th": "ผู้โจมตีแก้ไข world-writable cron script ใส่ reverse shell หรือ command ที่เป็นอันตราย → เมื่อ cron รัน script นั้นตามตาราง → ได้ root shell แบบ scheduled",
-        "check": "cron_script_writable",
-        "remediation": "Audit /etc/cron.* scripts for writable files. chmod 755 /etc/cron.d",
-        "prevention_th": [
-            "ตรวจสอบ world-writable script: find /etc/cron* -perm -002 -type f -ls",
-            "แก้ permission script ทั้งหมด: chmod 755 /etc/cron.d/* && chown root:root /etc/cron.d/*",
-            "ตรวจสอบ content ของ cron script ว่ามีการแก้ไขผิดปกติ: md5sum /etc/cron.d/*",
-            "ใช้ AIDE หรือ Tripwire monitor การเปลี่ยนแปลง cron script",
-            "อัปเกรด kernel เพื่อ patch overlayfs: apt upgrade linux-image-$(uname -r)",
-        ],
-    },
-]
-
-# ==============================
-# Version Matching
-# ==============================
-def match_version(current, rule):
-    import re as _re
-    # <999.0 is used as "always vulnerable" sentinel
-    if rule in ("<999.0", "<=999.0"):
-        return True
-    try:
-        if rule.startswith("<="):
-            return version.parse(current) < version.parse(rule[2:]) or                    version.parse(current) == version.parse(rule[2:])
-        if rule.startswith("<"):
-            return version.parse(current) < version.parse(rule[1:])
-    except Exception:
-        pass
-    # Fallback: numeric prefix comparison (handles "3.0pl1", "1.5.3-1+b1" etc.)
-    def nums(s):
-        return [int(x) for x in _re.findall(r"\d+", s)]
-    cur = nums(current)
-    thr_str = rule.lstrip("<=>")
-    thr = nums(thr_str)
-    length = max(len(cur), len(thr))
-    cur += [0] * (length - len(cur))
-    thr += [0] * (length - len(thr))
-    if rule.startswith("<="):
-        return cur <= thr
-    if rule.startswith("<"):
-        return cur < thr
-    return False
-
-# ==============================
-# Detection Checks
-# ==============================
-def check_log_permission(base_path):
-    for log_path in [
-        os.path.join(base_path, "var/log/cron"),
-        os.path.join(base_path, "var/log/cron.log"),
-        "/var/log/syslog",
-    ]:
-        if os.path.exists(log_path):
-            try:
-                mode = os.stat(log_path).st_mode
-                if bool(mode & stat.S_IWOTH):
-                    return True, log_path
-            except:
-                pass
-    return False, None
-
-def check_symlink(base_path):
-    found = []
-    for cron_dir in [
-        os.path.join(base_path, "etc/cron.d"),
-        os.path.join(base_path, "var/spool/cron"),
-        "/etc/cron.d",
-        "/var/spool/cron",
-    ]:
-        if os.path.exists(cron_dir):
-            try:
-                for root, dirs, files in os.walk(cron_dir):
-                    for f in files:
-                        fp = os.path.join(root, f)
-                        if os.path.islink(fp):
-                            found.append(fp)
-            except:
-                pass
-    return len(found) > 0, found
-
-def check_crontab_sgid(base_path):
-    for crontab_path in ["/usr/bin/crontab", "/bin/crontab"]:
-        if os.path.exists(crontab_path):
-            try:
-                mode = os.stat(crontab_path).st_mode
-                if bool(mode & stat.S_ISGID):
-                    return True, crontab_path
-            except:
-                pass
-    return False, None
-
-def check_world_writable_tmp(base_path):
-    tmp = os.path.join(base_path, "tmp") if base_path != "/" else "/tmp"
-    if os.path.exists(tmp):
-        try:
-            mode = os.stat(tmp).st_mode
-            is_writable = bool(mode & stat.S_IWOTH)
-            has_sticky  = bool(mode & stat.S_ISVTX)
-            if is_writable and not has_sticky:
-                return True, tmp
-        except:
-            pass
-    return False, None
-
-def check_cron_env_injection(base_path):
-    cron_dirs = [
-        "/etc/cron.d", "/etc/cron.daily",
-        "/etc/cron.weekly", "/etc/cron.hourly",
-        os.path.join(base_path, "etc/cron.d"),
-    ]
-    found = []
-    for d in cron_dirs:
-        if not os.path.isdir(d):
-            continue
-        try:
-            for root, _, files in os.walk(d):
-                for f in files:
-                    fp = os.path.join(root, f)
-                    try:
-                        with open(fp, "r", errors="ignore") as fh:
-                            content = fh.read()
-                            if "pkexec" in content or "LD_PRELOAD" in content:
-                                found.append(fp)
-                    except:
-                        pass
-        except:
-            pass
-    return len(found) > 0, found
-
-def check_crontab_sudo_all(base_path):
-    cron_dirs = [
-        "/etc/cron.d", "/var/spool/cron/crontabs",
-        os.path.join(base_path, "etc/cron.d"),
-    ]
-    found = []
-    for d in cron_dirs:
-        if not os.path.isdir(d):
-            continue
-        try:
-            for root, _, files in os.walk(d):
-                for f in files:
-                    fp = os.path.join(root, f)
-                    try:
-                        with open(fp, "r", errors="ignore") as fh:
-                            for line in fh:
-                                if "sudo" in line and not line.strip().startswith("#"):
-                                    found.append(f"{fp}: {line.strip()[:60]}")
-                    except:
-                        pass
-        except:
-            pass
-    return len(found) > 0, found
-
-def check_cron_script_writable(base_path):
-    found = []
-    for d in ["/etc/cron.d", "/etc/cron.daily", "/etc/cron.weekly", "/etc/cron.hourly"]:
-        if not os.path.exists(d):
-            continue
-        try:
-            for root, dirs, files in os.walk(d):
-                for f in files:
-                    fp = os.path.join(root, f)
-                    try:
-                        mode = os.stat(fp).st_mode
-                        if bool(mode & stat.S_IWOTH):
-                            found.append(fp)
-                    except:
-                        pass
-        except:
-            pass
-    return len(found) > 0, found
-
-# ==============================
-# Auto-detect cron type & version
-# ==============================
-def detect_cron():
-    candidates = [
-        ("cronie",      ["cronie", "crond"]),
-        ("debian cron", ["cron"]),
-        ("vixie",       ["vixie-cron", "cron"]),
-        ("dcron",       ["dcron", "crond"]),
-    ]
-
-    detected_type    = None
-    detected_version = None
-
-    for ctype, pkgs in candidates:
-        for pkg in pkgs:
-            try:
-                r = subprocess.run(
-                    ["dpkg", "-s", pkg],
-                    capture_output=True, text=True, timeout=3
-                )
-                if r.returncode == 0 and "installed" in r.stdout:
-                    for line in r.stdout.split("\n"):
-                        if line.startswith("Version:"):
-                            detected_version = line.split(":", 1)[1].strip().split("-")[0]
-                            detected_type    = ctype
-                            return detected_type, detected_version
-            except:
-                pass
-
-    for ctype, pkgs in candidates:
-        for pkg in pkgs:
-            try:
-                r = subprocess.run(
-                    ["rpm", "-q", "--queryformat", "%{VERSION}", pkg],
-                    capture_output=True, text=True, timeout=3
-                )
-                if r.returncode == 0 and r.stdout.strip():
-                    detected_version = r.stdout.strip()
-                    detected_type    = ctype
-                    return detected_type, detected_version
-            except:
-                pass
-
-    for binary in ["crond", "cron"]:
-        try:
-            r = subprocess.run(
-                [binary, "--version"],
-                capture_output=True, text=True, timeout=3
-            )
-            out = (r.stdout + r.stderr).lower()
-            import re
-            m = re.search(r"(\d+\.\d+[\.\d]*)", out)
-            if m:
-                detected_version = m.group(1)
-                if "cronie" in out:
-                    detected_type = "cronie"
-                elif "vixie" in out:
-                    detected_type = "vixie"
-                else:
-                    detected_type = "debian cron"
-                return detected_type, detected_version
-        except:
-            pass
-
-    return None, None
-
-# ==============================
-# Run Scan
-# ==============================
-def run_scan(cron_type, cron_version, base_path="/"):
-    findings = []
-
-    log_vuln,    log_path     = check_log_permission(base_path)
-    sym_vuln,    sym_paths    = check_symlink(base_path)
-    sgid_vuln,   sgid_path    = check_crontab_sgid(base_path)
-    tmp_vuln,    tmp_path     = check_world_writable_tmp(base_path)
-    env_vuln,    env_paths    = check_cron_env_injection(base_path)
-    sudo_vuln,   sudo_paths   = check_crontab_sudo_all(base_path)
-    script_vuln, script_paths = check_cron_script_writable(base_path)
-
-    check_map = {
-        "log_permission":     (log_vuln,    {"path": log_path}),
-        "symlink_check":      (sym_vuln,    {"paths": sym_paths}),
-        "crontab_sgid":       (sgid_vuln,   {"path": sgid_path}),
-        "world_writable_tmp": (tmp_vuln,    {"path": tmp_path}),
-        "cron_env_injection": (env_vuln,    {"paths": env_paths}),
-        "crontab_sudo_all":   (sudo_vuln,   {"lines": sudo_paths}),
-        "cron_script_writable":(script_vuln, {"paths": script_paths}),
-        "version_only":       (True,        {}),
-    }
-
-    cron_type_lower = cron_type.lower()
-
-    for entry in CVE_DB:
-        if not any(cron_type_lower == s.lower() for s in entry["software"]):
-            continue
-        if not match_version(cron_version, entry["affected_version"]):
-            continue
-
-        check_key = entry["check"]
-        vulnerable, detail = check_map.get(check_key, (False, {}))
-
-        if vulnerable:
-            findings.append({
-                "cve":            entry["cve"],
-                "name":           entry["name"],
-                "category":       entry["category"],
-                "cvss":           entry["cvss"],
-                "severity":       severity_from_cvss(entry["cvss"]),
-                "description":    entry["description"],
-                "description_th": entry.get("description_th", ""),
-                "impact_th":      entry.get("impact_th", ""),
-                "remediation":    entry["remediation"],
-                "prevention_th":  entry.get("prevention_th", []),
-                "check":          check_key,
-                "detail":         detail,
-            })
-
-    return findings, {
-        "log_permission":   (log_vuln,    log_path),
-        "symlink_check":    (sym_vuln,    sym_paths),
-        "sgid_check":       (sgid_vuln,   sgid_path),
-        "tmp_sticky":       (tmp_vuln,    tmp_path),
-        "env_injection":    (env_vuln,    env_paths),
-        "sudo_in_crontab":  (sudo_vuln,   sudo_paths),
-        "writable_scripts": (script_vuln, script_paths),
-    }
-
-# ==============================
-# Lab Environment
-# ==============================
-def setup_lab_environment():
-    print(c(Color.CYAN, "\n  [*] Setting up LAB environment..."))
-    base = "./lab_env"
-
-    os.makedirs(base + "/etc/cron.d",  exist_ok=True)
-    os.makedirs(base + "/var/log",     exist_ok=True)
-    os.makedirs(base + "/tmp",         exist_ok=True)
-    os.makedirs(base + "/usr/bin",     exist_ok=True)
-
-    log_file = base + "/var/log/cron"
-    with open(log_file, "w") as f:
-        f.write("fake cron log entry\n")
-    os.chmod(log_file, 0o666)
-
-    target = base + "/etc/passwd_fake"
-    with open(target, "w") as f:
-        f.write("root:x:0:0:root:/root:/bin/bash\n")
-    symlink_path = base + "/etc/cron.d/malicious_link"
-    if not os.path.exists(symlink_path):
-        os.symlink(os.path.abspath(target), symlink_path)
-
-    os.chmod(base + "/tmp", 0o777)
-
-    cron_script = base + "/etc/cron.d/backup"
-    with open(cron_script, "w") as f:
-        f.write("*/5 * * * * root pkexec /usr/bin/backup.sh\n")
-
-    print(c(Color.GREEN, "  [+] LAB ready at ./lab_env"))
-    print(c(Color.GRAY,  "      ├── var/log/cron       (world-writable)"))
-    print(c(Color.GRAY,  "      ├── etc/cron.d/malicious_link  (symlink)"))
-    print(c(Color.GRAY,  "      ├── tmp/               (no sticky bit)"))
-    print(c(Color.GRAY,  "      └── etc/cron.d/backup  (pkexec injection)"))
-    return base
-
-# ==============================
-# Pretty Output
-# ==============================
-def print_banner():
-    print(f"""
-{c(Color.CYAN + Color.BOLD, '''
- ██████╗ ██████╗ ███████╗██╗   ██╗██╗███╗   ██╗████████╗███████╗
-██╔════╝██╔═══██╗██╔════╝██║   ██║██║████╗  ██║╚══██╔══╝██╔════╝
-██║     ██║   ██║███████╗██║   ██║██║██╔██╗ ██║   ██║   █████╗
-██║     ██║   ██║╚════██║╚██╗ ██╔╝██║██║╚██╗██║   ██║   ██╔══╝
-╚██████╗╚██████╔╝███████║ ╚████╔╝ ██║██║ ╚████║   ██║   ███████╗
- ╚═════╝ ╚═════╝ ╚══════╝  ╚═══╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝''')}
-{c(Color.GRAY, '         Cron CVE Scanner  |  "Conquer Vulnerabilities"')}
-""")
-
-def print_sysinfo(cron_type, cron_version, mode_label, base_path):
-    print(c(Color.CYAN + Color.BOLD, "  ╔══ SCAN INFORMATION ═══════════════════════════════════════╗"))
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Hostname   :')} {c(Color.WHITE,  platform.node())}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Distro     :')} {c(Color.WHITE,  get_distro())}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Mode       :')} {c(Color.YELLOW, mode_label)}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Cron Type  :')} {c(Color.MAGENTA + Color.BOLD, cron_type)}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Cron Ver   :')} {c(Color.YELLOW, cron_version)}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Scan Path  :')} {c(Color.WHITE,  base_path)}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Timestamp  :')} {c(Color.WHITE,  datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}")
-    print(c(Color.CYAN + Color.BOLD, "  ╚═══════════════════════════════════════════════════════════╝\n"))
-
-def print_checks(checks):
-    print(c(Color.CYAN + Color.BOLD, "\n  ── DETECTION CHECKS ──\n"))
-    labels = {
-        "log_permission":   "Cron log world-writable",
-        "symlink_check":    "Symlinks in cron.d / spool",
-        "sgid_check":       "crontab SGID bit",
-        "tmp_sticky":       "/tmp without sticky bit",
-        "env_injection":    "pkexec / LD_PRELOAD in cron jobs",
-        "sudo_in_crontab":  "sudo usage in crontabs",
-        "writable_scripts": "World-writable cron scripts",
-    }
-    for key, (vuln, detail) in checks.items():
-        label = labels.get(key, key)
-        if vuln:
-            icon  = c(Color.RED + Color.BOLD, "  ✖ FOUND  ")
-            extra = ""
-            if isinstance(detail, str) and detail:
-                extra = f"  {c(Color.ORANGE,'→')} {c(Color.YELLOW, detail)}"
-            elif isinstance(detail, list) and detail:
-                extra = f"  {c(Color.ORANGE,'→')} {c(Color.YELLOW, str(detail[0])[:60])}"
-        else:
-            icon  = c(Color.GREEN, "  ✔ OK     ")
-            extra = ""
-        print(f"  {icon} {c(Color.WHITE, label)}{extra}")
-
-def print_findings(findings):
-    if not findings:
-        print(c(Color.GREEN + Color.BOLD, "\n  ✔  No CVE matches found for this cron configuration.\n"))
-        return
-
-    print(c(Color.RED + Color.BOLD, f"\n  ── CVE FINDINGS ({len(findings)}) ──"))
-
-    for f in sorted(findings, key=lambda x: x["cvss"], reverse=True):
-        print(f"\n  {c(Color.RED + Color.BOLD, '✖')}  {c(Color.BOLD + Color.WHITE, f['cve'])}  "
-              f"{c(Color.MAGENTA, f['name'])}  {severity_badge(f['severity'])}")
-        print(f"     {c(Color.GRAY,'Category    :')} {c(Color.CYAN, f['category'])}")
-        print(f"     {c(Color.GRAY,'CVSS Score  :')} {cvss_bar(f['cvss'])}")
-        # English description
-        print(f"     {c(Color.GRAY,'Description :')} {f['description'][:85]}{'...' if len(f['description'])>85 else ''}")
-        # Thai vulnerability explanation
-        if f.get("description_th"):
-            print(f"     {c(Color.CYAN,'📋 ช่องโหว่  :')} {c(Color.WHITE, f['description_th'][:90])}{'...' if len(f['description_th'])>90 else ''}")
-        if f.get("impact_th"):
-            print(f"     {c(Color.ORANGE,'⚡ ผลกระทบ  :')} {c(Color.YELLOW, f['impact_th'][:90])}{'...' if len(f['impact_th'])>90 else ''}")
-        # Evidence
-        detail = f.get("detail", {})
-        if detail.get("path"):
-            print(f"     {c(Color.ORANGE,'→ Evidence  :')} {c(Color.YELLOW, str(detail['path']))}")
-        elif detail.get("paths"):
-            for p in detail["paths"][:2]:
-                print(f"     {c(Color.ORANGE,'→ Evidence  :')} {c(Color.YELLOW, str(p)[:70])}")
-        elif detail.get("lines"):
-            for line in detail["lines"][:2]:
-                print(f"     {c(Color.ORANGE,'→ Evidence  :')} {c(Color.YELLOW, str(line)[:70])}")
-        # Thai prevention tips
-        if f.get("prevention_th"):
-            print(f"     {c(Color.GREEN + Color.BOLD,'🛡  การป้องกัน:')}")
-            for i, tip in enumerate(f["prevention_th"], 1):
-                print(f"       {c(Color.GREEN, f'  {i}.')} {c(Color.GRAY, tip[:85])}{'...' if len(tip)>85 else ''}")
-        else:
-            print(f"     {c(Color.GREEN,'✦  Fix      :')} {c(Color.GRAY, f['remediation'])}")
-
-def print_summary(cron_type, cron_version, findings, checks):
-    high     = sum(1 for f in findings if f["severity"] in ("HIGH", "CRITICAL"))
-    medium   = sum(1 for f in findings if f["severity"] == "MEDIUM")
-    max_cvss = max((f["cvss"] for f in findings), default=0)
-    checks_triggered = sum(1 for v, _ in checks.values() if v)
-
-    def sev(score):
-        if score >= 9: return "CRITICAL"
-        if score >= 7: return "HIGH"
-        if score >= 4: return "MEDIUM"
-        if score > 0:  return "LOW"
-        return "NONE"
-
-    print(f"\n{c(Color.CYAN + Color.BOLD, '  ╔══ SCAN SUMMARY ════════════════════════════════════════════╗')}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Cron Software      :')} {c(Color.MAGENTA + Color.BOLD, cron_type)}  v{c(Color.YELLOW, cron_version)}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'CVEs in Database   :')} {c(Color.WHITE, str(len(CVE_DB)))}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Checks Triggered   :')} {c(Color.YELLOW + Color.BOLD, str(checks_triggered))}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Total CVE Findings :')} {c(Color.RED + Color.BOLD, str(len(findings)))}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.RED,  '  HIGH / CRITICAL  :')} {c(Color.RED + Color.BOLD, str(high))}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.YELLOW,'  MEDIUM           :')} {c(Color.YELLOW + Color.BOLD, str(medium))}")
-    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Overall Risk Score :')} {severity_badge(sev(max_cvss))}  {c(Color.GRAY,'CVSS')} {c(Color.BOLD, f'{max_cvss:.1f}')}")
-    print(c(Color.CYAN + Color.BOLD, '  ╚═══════════════════════════════════════════════════════════╝\n'))
+def get_kernel_version():
+    full = platform.uname().release
+    base = full.split("-")[0]
+    return base, full
 
 def get_distro():
     try:
-        r = subprocess.run(["lsb_release", "-d"], capture_output=True, text=True)
-        return r.stdout.replace("Description:", "").strip()
+        result = subprocess.run(["lsb_release", "-d"], capture_output=True, text=True)
+        return result.stdout.strip().replace("Description:", "").strip()
     except:
         try:
             with open("/etc/os-release") as f:
@@ -748,50 +527,249 @@ def get_distro():
         except:
             return "Unknown"
 
+def get_hostname():
+    return platform.node()
+
+def get_arch():
+    return platform.machine()
+
+# ==============================
+# Backport Patch Detection
+# ==============================
+def check_backport_via_sysfs(cve_entry):
+    """
+    Try to detect if a patch has been backported by distros
+    using /proc/sys or changelog heuristics.
+    """
+    indicators = cve_entry.get("patch_indicator", [])
+    if not indicators:
+        return None  # Cannot determine
+
+    # Method 1: Check kernel config (some distros expose patch notes)
+    try:
+        result = subprocess.run(
+            ["grep", "-r"] + indicators[:1] + ["/proc/version"],
+            capture_output=True, text=True, timeout=2
+        )
+        if result.returncode == 0:
+            return True
+    except:
+        pass
+
+    # Method 2: Check package changelog (Debian/Ubuntu)
+    try:
+        pkg_result = subprocess.run(
+            ["dpkg", "-l", "linux-image*"],
+            capture_output=True, text=True, timeout=3
+        )
+        if pkg_result.returncode == 0:
+            cve_id = cve_entry["cve"]
+            changelog = subprocess.run(
+                ["apt-get", "changelog", f"linux-image-$(uname -r)", "--no-download"],
+                capture_output=True, text=True, timeout=5
+            )
+            if cve_id in changelog.stdout:
+                return True
+    except:
+        pass
+
+    # Method 3: Check RPM changelog (RHEL/CentOS/Fedora)
+    try:
+        rpm_result = subprocess.run(
+            ["rpm", "-q", "--changelog", "kernel"],
+            capture_output=True, text=True, timeout=5
+        )
+        if rpm_result.returncode == 0:
+            cve_id = cve_entry["cve"]
+            if cve_id in rpm_result.stdout:
+                return True
+    except:
+        pass
+
+    return None  # Unknown
+
+def check_kpatch(cve_id):
+    """Check if kpatch live-patch covers this CVE"""
+    try:
+        result = subprocess.run(
+            ["kpatch", "list"],
+            capture_output=True, text=True, timeout=3
+        )
+        if cve_id.replace("-", "_").lower() in result.stdout.lower():
+            return True
+    except:
+        pass
+    return False
+
+# ==============================
+# Version Range Match
+# ==============================
+def is_vulnerable(current, min_v, max_v):
+    try:
+        cur = version.parse(current)
+        return version.parse(min_v) <= cur <= version.parse(max_v)
+    except:
+        return False
+
+# ==============================
+# Core Scan
+# ==============================
+def scan_kernel(kernel_ver):
+    findings = []
+
+    for entry in CVE_DB:
+        if is_vulnerable(kernel_ver, entry["affected_min"], entry["affected_max"]):
+            # Check backport
+            patched_via_backport = check_backport_via_sysfs(entry)
+            patched_via_kpatch   = check_kpatch(entry["cve"])
+
+            patched = patched_via_backport or patched_via_kpatch
+            status  = "PATCHED" if patched else ("UNKNOWN" if patched_via_backport is None else "VULNERABLE")
+
+            findings.append({
+                "cve":         entry["cve"],
+                "name":        entry["name"],
+                "category":    entry["category"],
+                "severity":    entry["severity"],
+                "cvss":        entry["cvss"],
+                "description": entry["description"],
+                "status":      status,
+                "backport_detected": patched_via_backport,
+                "kpatch_detected":   patched_via_kpatch,
+                "note":        entry.get("note", ""),
+                "thai_detail":      entry.get("thai_detail", ""),
+                "thai_mitigation":  entry.get("thai_mitigation", "")
+            })
+
+    return findings
+
+# ==============================
+# Pretty Print Report
+# ==============================
+def print_banner():
+    banner = f"""
+{Color.CYAN}{Color.BOLD}
+ ██████╗ ██████╗ ███████╗██╗   ██╗██╗███╗   ██╗████████╗███████╗
+██╔════╝██╔═══██╗██╔════╝██║   ██║██║████╗  ██║╚══██╔══╝██╔════╝
+██║     ██║   ██║███████╗██║   ██║██║██╔██╗ ██║   ██║   █████╗
+██║     ██║   ██║╚════██║╚██╗ ██╔╝██║██║╚██╗██║   ██║   ██╔══╝
+╚██████╗╚██████╔╝███████║ ╚████╔╝ ██║██║ ╚████║   ██║   ███████╗
+ ╚═════╝ ╚═════╝ ╚══════╝  ╚═══╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝
+{Color.RESET}{Color.GRAY}         Kernel CVE Scanner  |  "Conquer Vulnerabilities"{Color.RESET}
+"""
+    print(banner)
+
+def print_sysinfo(kernel_full, distro, hostname, arch):
+    print(c(Color.CYAN + Color.BOLD, "  ╔══ SYSTEM INFORMATION ════════════════════════════════════╗"))
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Hostname   :')} {c(Color.WHITE, hostname)}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Distro     :')} {c(Color.WHITE, distro)}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Kernel     :')} {c(Color.YELLOW + Color.BOLD, kernel_full)}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Arch       :')} {c(Color.WHITE, arch)}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Timestamp  :')} {c(Color.WHITE, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}")
+    print(c(Color.CYAN + Color.BOLD, "  ╚═══════════════════════════════════════════════════════════╝\n"))
+
+def print_thai_detail(finding):
+    """Print Thai vulnerability detail and mitigation block"""
+    thai_detail     = finding.get("thai_detail", "")
+    thai_mitigation = finding.get("thai_mitigation", "")
+
+    if thai_detail:
+        print(f"     {c(Color.BLUE + Color.BOLD, '📋 รายละเอียดช่องโหว่ (ภาษาไทย):')}")
+        print(f"     {c(Color.CYAN,  '   ' + thai_detail)}")
+
+    if thai_mitigation:
+        print(f"     {c(Color.GREEN + Color.BOLD, '🛡  วิธีป้องกัน/แก้ไข:')}")
+        print(f"     {c(Color.GREEN, '   ' + thai_mitigation)}")
+
+def print_findings(findings):
+    if not findings:
+        print(c(Color.GREEN + Color.BOLD, "\n  ✔  No vulnerabilities matched for this kernel version.\n"))
+        return
+
+    # Group by status
+    vulnerable = [f for f in findings if f["status"] == "VULNERABLE"]
+    unknown    = [f for f in findings if f["status"] == "UNKNOWN"]
+    patched    = [f for f in findings if f["status"] == "PATCHED"]
+
+    def print_group(group, label, label_color):
+        if not group:
+            return
+        print(f"\n{label_color}{Color.BOLD}  ── {label} ({len(group)}) ──{Color.RESET}")
+        for f in group:
+            icon = "✖" if f["status"] == "VULNERABLE" else ("?" if f["status"] == "UNKNOWN" else "✔")
+            icon_color = Color.RED if f["status"] == "VULNERABLE" else (Color.YELLOW if f["status"] == "UNKNOWN" else Color.GREEN)
+            sev_badge = severity_badge(f["severity"])
+            print(f"\n  {c(icon_color, icon)}  {c(Color.BOLD + Color.WHITE, f['cve'])}  {c(Color.MAGENTA, f['name'])}  {sev_badge}")
+            print(f"     {c(Color.GRAY, 'Category   :')} {c(Color.CYAN, f['category'])}")
+            print(f"     {c(Color.GRAY, 'CVSS Score :')} {cvss_bar(f['cvss'])}")
+            print(f"     {c(Color.GRAY, 'Description:')} {f['description'][:80]}{'...' if len(f['description'])>80 else ''}")
+            if f["note"]:
+                print(f"     {c(Color.YELLOW, '⚠  Note     :')} {f['note']}")
+            if f["backport_detected"] is True:
+                print(f"     {c(Color.GREEN, '✔  Backport : Patch detected via package manager')}")
+            elif f["kpatch_detected"]:
+                print(f"     {c(Color.GREEN, '✔  kpatch   : Live patch detected')}")
+            elif f["status"] == "UNKNOWN":
+                print(f"     {c(Color.YELLOW, '?  Backport : Could not verify — manual check recommended')}")
+
+            # ── NEW: Thai detail + mitigation ──
+            print()
+            print_thai_detail(f)
+            print(f"     {c(Color.GRAY, '─' * 60)}")
+
+    print_group(vulnerable, "VULNERABLE", Color.RED)
+    print_group(unknown,    "UNVERIFIED (may be patched by distro)", Color.YELLOW)
+    print_group(patched,    "PATCHED",    Color.GREEN)
+
+def print_summary(findings, kernel_ver):
+    total      = len(findings)
+    vulnerable = sum(1 for f in findings if f["status"] == "VULNERABLE")
+    unknown    = sum(1 for f in findings if f["status"] == "UNKNOWN")
+    patched    = sum(1 for f in findings if f["status"] == "PATCHED")
+    max_cvss   = max((f["cvss"] for f in findings), default=0)
+    overall    = severity_from_cvss(max_cvss)
+
+    print(f"\n{c(Color.CYAN + Color.BOLD, '  ╔══ SCAN SUMMARY ════════════════════════════════════════════╗')}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Kernel Scanned  :')} {c(Color.YELLOW + Color.BOLD, kernel_ver)}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'CVEs in Database:')} {c(Color.WHITE, str(len(CVE_DB)))}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Total Matches   :')} {c(Color.WHITE, str(total))}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.RED,  '  Vulnerable     :')} {c(Color.RED + Color.BOLD, str(vulnerable))}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.YELLOW,'  Unverified     :')} {c(Color.YELLOW + Color.BOLD, str(unknown))}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GREEN, '  Patched        :')} {c(Color.GREEN + Color.BOLD, str(patched))}")
+    print(f"  {c(Color.CYAN,'║')}  {c(Color.GRAY,'Overall Risk    :')} {severity_badge(overall)}  {c(Color.GRAY,'CVSS')} {c(Color.BOLD, f'{max_cvss:.1f}')}")
+    print(c(Color.CYAN + Color.BOLD,  '  ╚═══════════════════════════════════════════════════════════╝\n'))
+
 # ==============================
 # Save Report
 # ==============================
-def save_report(cron_type, cron_version, findings, checks, base_path):
-    def sev(score):
-        if score >= 9: return "CRITICAL"
-        if score >= 7: return "HIGH"
-        if score >= 4: return "MEDIUM"
-        return "NONE"
-
-    max_cvss = max((f["cvss"] for f in findings), default=0)
-
+def save_report(findings, kernel_ver, kernel_full, distro):
     report = {
-        "tool":      "COSVINTE — Cron CVE Scanner",
+        "tool": "COSVINTE",
         "timestamp": datetime.now().isoformat(),
         "system": {
-            "hostname": platform.node(),
-            "distro":   get_distro(),
-        },
-        "scan": {
-            "cron_type":    cron_type,
-            "cron_version": cron_version,
-            "base_path":    base_path,
-        },
-        "checks": {
-            k: {"vulnerable": bool(v), "detail": str(d) if d else None}
-            for k, (v, d) in checks.items()
+            "hostname": get_hostname(),
+            "distro": distro,
+            "kernel_version": kernel_ver,
+            "kernel_full": kernel_full,
+            "arch": get_arch()
         },
         "summary": {
-            "total_cve_db":     len(CVE_DB),
-            "total_findings":   len(findings),
-            "overall_cvss":     max_cvss,
-            "overall_severity": sev(max_cvss),
+            "total_cve_db": len(CVE_DB),
+            "total_matches": len(findings),
+            "vulnerable": sum(1 for f in findings if f["status"] == "VULNERABLE"),
+            "unverified": sum(1 for f in findings if f["status"] == "UNKNOWN"),
+            "patched": sum(1 for f in findings if f["status"] == "PATCHED"),
+            "overall_cvss": max((f["cvss"] for f in findings), default=0),
+            "overall_severity": severity_from_cvss(max((f["cvss"] for f in findings), default=0))
         },
-        "findings": [
-            {k: v for k, v in f.items() if k != "detail"}
-            for f in findings
-        ],
+        "findings": findings
     }
 
-    fname = f"cosvinte_cron_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    with open(fname, "w", encoding="utf-8") as f:
+    filename = f"cosvinte_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    with open(filename, "w") as f:
         json.dump(report, f, indent=4, ensure_ascii=False)
-    return fname
+
+    return filename
 
 # ==============================
 # MAIN
@@ -799,54 +777,22 @@ def save_report(cron_type, cron_version, findings, checks, base_path):
 def main():
     print_banner()
 
-    print(c(Color.CYAN + Color.BOLD, "  Select Mode:"))
-    print(f"  {c(Color.WHITE, '1')} {c(Color.GRAY,'─')} Real Scan (auto-detect or manual)")
-    print(f"  {c(Color.WHITE, '2')} {c(Color.GRAY,'─')} Lab Simulation (safe test environment)")
-    print(f"  {c(Color.WHITE, '3')} {c(Color.GRAY,'─')} Manual Input\n")
+    kernel_ver, kernel_full = get_kernel_version()
+    distro   = get_distro()
+    hostname = get_hostname()
+    arch     = get_arch()
 
-    mode = input(c(Color.CYAN, "  Enter choice [1/2/3]: ")).strip()
+    print_sysinfo(kernel_full, distro, hostname, arch)
 
-    if mode == "2":
-        base         = setup_lab_environment()
-        cron_type    = "cronie"
-        cron_version = "1.4.0"
-        mode_label   = "Lab Simulation"
-
-    elif mode == "3":
-        base = "/"
-        print()
-        cron_type    = input(c(Color.CYAN, "  Cron type (cronie/vixie/dcron/debian cron): ")).strip()
-        cron_version = input(c(Color.CYAN, "  Cron version (e.g. 1.4.0): ")).strip()
-        mode_label   = "Manual Input"
-
-    else:
-        base       = "/"
-        mode_label = "Auto-Detect"
-        print(c(Color.CYAN, "\n  [*] Auto-detecting cron software..."), end="", flush=True)
-        cron_type, cron_version = detect_cron()
-
-        if cron_type and cron_version:
-            print(c(Color.GREEN, f" found: {cron_type} v{cron_version}\n"))
-        else:
-            print(c(Color.YELLOW, " not detected\n"))
-            print(c(Color.YELLOW, "  Could not auto-detect cron. Switching to manual input.\n"))
-            cron_type    = input(c(Color.CYAN, "  Cron type (cronie/vixie/dcron/debian cron): ")).strip()
-            cron_version = input(c(Color.CYAN, "  Cron version (e.g. 1.4.0): ")).strip()
-            mode_label   = "Manual Input"
-
-    print()
-    print_sysinfo(cron_type, cron_version, mode_label, base)
-
-    print(c(Color.CYAN, "  [*] Running detection checks..."), end="", flush=True)
-    findings, checks = run_scan(cron_type, cron_version, base)
+    print(c(Color.CYAN, "  [*] Scanning against CVE database..."), end="", flush=True)
+    findings = scan_kernel(kernel_ver)
     print(c(Color.GREEN, " done\n"))
 
-    print_checks(checks)
     print_findings(findings)
-    print_summary(cron_type, cron_version, findings, checks)
+    print_summary(findings, kernel_ver)
 
-    fname = save_report(cron_type, cron_version, findings, checks, base)
-    print(c(Color.GRAY, f"  Report saved → {c(Color.WHITE + Color.BOLD, fname)}\n"))
+    filename = save_report(findings, kernel_ver, kernel_full, distro)
+    print(c(Color.GRAY, f"  Report saved → {c(Color.WHITE + Color.BOLD, filename)}\n"))
 
 if __name__ == "__main__":
     main()
